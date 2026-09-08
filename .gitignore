@@ -1,0 +1,65 @@
+# This is the repo-root .gitignore for the MyPA monorepo (backend + future frontend).
+# backend/.gitignore covers Python-specific paths (venv, mypy/ruff/pytest caches, etc.)
+# in more detail — this file covers things that can show up anywhere in the tree.
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- OS files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# --- Editors / IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Node / frontend (for when the frontend app lands) ---
+node_modules/
+dist/
+build/
+.next/
+out/
+.turbo/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# --- Python (root-level, in case scripts live outside backend/) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# --- Misc ---
+*.tmp
+*.bak
+
+# --- Local-only docs (not tracked in this repo) ---
+/dumpbox/
+/project-manager/

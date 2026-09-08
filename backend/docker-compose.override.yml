@@ -1,0 +1,14 @@
+# TEMPORARY, local-only override for this verification session.
+# Ports 5432 and 6379 are occupied on this machine by unrelated services
+# (a native postgres.exe Windows service + the vitlycare-postgres docker
+# container on 5432/5433, and memurai.exe on 6379). Remap this project's
+# containers to unused host ports instead. Gitignored — not for commit.
+# `!override` fully replaces the base file's ports list rather than appending
+# to it (Compose's default list-merge behavior is concatenation).
+services:
+  db:
+    ports: !override
+      - "5434:5432"
+  redis:
+    ports: !override
+      - "6380:6379"

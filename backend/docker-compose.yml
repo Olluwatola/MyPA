@@ -1,0 +1,26 @@
+# Local dev dependencies only — Postgres + Redis. The app itself runs via
+# `uv run uvicorn src.app.main:app --reload` (see README), not containerized here.
+# Deployment topology (containerizing the app, nginx, etc.) is deferred — see
+# project-manager/decisions-log.md.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-mypa}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  postgres-data:
+  redis-data:
