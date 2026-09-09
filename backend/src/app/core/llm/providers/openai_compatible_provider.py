@@ -8,9 +8,9 @@ from typing import Any
 import httpx
 
 from ...exceptions.http_exceptions import UnprocessableEntityException
+from ...utils.http_retry import execute_with_retry
 from ..errors import raise_for_llm_status
 from ..provider import LlmCompletionResult, LlmProviderCompletionRequest, LlmUsage
-from ..retry import execute_with_retry
 
 
 class OpenAiCompatibleLlmProvider:

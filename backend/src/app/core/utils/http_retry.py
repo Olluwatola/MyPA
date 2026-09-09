@@ -1,4 +1,7 @@
-"""Shared retry helper, used by both provider adapters.
+"""Shared retry helper — genuinely HTTP-agnostic, not LLM-specific (relocated out of
+`core/llm/` in Feature 1.4 so a Gmail/Calendar module importing it isn't a confusing,
+backwards coupling to the LLM layer). Used by both LLM provider adapters and by the
+Gmail/Calendar integration modules, each passing their own `retryable_status_codes`.
 
 Retries two distinct failure modes the same way (same backoff, same attempt budget):
 - HTTP 429 (rate limit) responses — deliberately excludes 500/502/503. A completion call

@@ -1,11 +1,14 @@
-"""Direct unit tests of execute_with_retry's backoff/retry-count logic."""
+"""Direct unit tests of execute_with_retry's backoff/retry-count logic.
+
+Relocated with the module in Feature 1.4 (core/llm/retry.py -> core/utils/http_retry.py)
+— import path only, no behavior change."""
 
 from unittest.mock import Mock
 
 import httpx
 import pytest
 
-from src.app.core.llm.retry import DEFAULT_RETRYABLE_STATUS_CODES, execute_with_retry
+from src.app.core.utils.http_retry import DEFAULT_RETRYABLE_STATUS_CODES, execute_with_retry
 
 
 def make_response(status_code: int) -> Mock:

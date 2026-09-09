@@ -121,6 +121,45 @@ class GoogleOAuthSettings(BaseSettings):
     FRONTEND_OAUTH_CALLBACK_URL: str = "http://localhost:3000/auth/callback"
 
 
+class TokenEncryptionSettings(BaseSettings):
+    # Reversible-encryption key for third-party OAuth tokens (see core/crypto.py) — a
+    # distinct security boundary from SECRET_KEY, with its own rotation story. Must be a
+    # valid Fernet key (32 url-safe base64-encoded bytes); generate with:
+    # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+    TOKEN_ENCRYPTION_KEY: SecretStr = SecretStr("oROiaiuWqk0rWj8kwTCFgI5crDnAP5QHYZHxg8JXLN0=")
+
+
+class GoogleIntegrationSettings(BaseSettings):
+    """Google OAuth settings for the email/calendar integrations flow — distinct from
+    `GoogleOAuthSettings` (login). Google validates the exact registered redirect URI per
+    client, so login and integrations need their own, separately-registered URIs even
+    though both use the same `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`."""
+
+    GOOGLE_INTEGRATIONS_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/google/callback"
+    # Both scopes requested together in one consent grant (see integrations_google.py).
+    GOOGLE_GMAIL_CALENDAR_SCOPES: str = (
+        "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly"
+    )
+    # Where the integrations callback redirects the browser after connecting.
+    FRONTEND_INTEGRATIONS_CALLBACK_URL: str = "http://localhost:3000/settings/integrations"
+    # Public HTTPS URL Calendar's events.watch() pushes change notifications to.
+    GOOGLE_CALENDAR_WEBHOOK_URL: str = "http://localhost:8000/api/v1/webhooks/google/calendar"
+
+
+class GooglePubSubSettings(BaseSettings):
+    """Deliberately no field for GCP service-account credentials —
+    `google-cloud-pubsub` reads `GOOGLE_APPLICATION_CREDENTIALS` (a file path) directly
+    from the OS environment via standard Application Default Credentials; reinventing
+    that as a pydantic field would fight the library's own auth resolution.
+
+    Full resource paths (`projects/<project>/topics/<topic>`,
+    `projects/<project>/subscriptions/<sub>`), not bare names — simpler than deriving the
+    project id separately when the pull worker needs the full path either way."""
+
+    GOOGLE_PUBSUB_TOPIC: str = ""
+    GOOGLE_PUBSUB_SUBSCRIPTION: str = ""
+
+
 class LlmTierSettings(BaseSettings):
     """Tier = a quality/cost band (high/medium/low), not a specific provider. Each tier
     picks a provider profile; model names for ALL THREE providers are pre-filled per tier
@@ -178,6 +217,9 @@ class Settings(
     GoogleOAuthSettings,
     LlmTierSettings,
     MemorySettings,
+    TokenEncryptionSettings,
+    GoogleIntegrationSettings,
+    GooglePubSubSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".env"),

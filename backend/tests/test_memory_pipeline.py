@@ -102,6 +102,37 @@ class TestRunMemoryExtractionPipeline:
         assert created_task.user_id == user_id
 
     @pytest.mark.asyncio
+    async def test_embed_false_skips_embedding_step(self, mock_db):
+        """Feature 1.4: calendar ingestion passes embed=False (no similarity-search need
+        for event content) — every other existing call site keeps the embed=True
+        default, unaffected."""
+        user_id = uuid4()
+        record_id = uuid4()
+
+        with (
+            patch.object(extraction, "call_extraction_llm", AsyncMock(return_value=make_result([]))),
+            patch.object(extraction, "embed_text", AsyncMock(return_value=[0.1] * 384)) as mock_embed_text,
+            patch.object(
+                extraction.crud_memory_extraction_records, "create", AsyncMock(return_value={"id": record_id})
+            ),
+            patch.object(extraction.crud_embeddings, "create", AsyncMock()) as mock_embed_create,
+            patch.object(extraction.crud_tasks, "create", AsyncMock()),
+        ):
+            record = await extraction.run_memory_extraction_pipeline(
+                db=mock_db,
+                user_id=user_id,
+                source_type="calendar",
+                source_channel=None,
+                content="Team sync at 10am",
+                embed=False,
+            )
+
+        assert record == {"id": record_id}
+        mock_embed_text.assert_not_called()
+        mock_embed_create.assert_not_called()
+        mock_db.commit.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_low_confidence_candidate_is_not_promoted(self, mock_db):
         user_id = uuid4()
         record_id = uuid4()

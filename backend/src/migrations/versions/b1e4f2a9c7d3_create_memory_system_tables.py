@@ -48,9 +48,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_memory_extraction_record_user_id"), "memory_extraction_record", ["user_id"], unique=False
-    )
+    op.create_index(op.f("ix_memory_extraction_record_user_id"), "memory_extraction_record", ["user_id"], unique=False)
 
     op.create_table(
         "tasks",
@@ -89,9 +87,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["memory_record_id"], ["memory_extraction_record.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_embeddings_memory_record_id"), "embeddings", ["memory_record_id"], unique=True
-    )
+    op.create_index(op.f("ix_embeddings_memory_record_id"), "embeddings", ["memory_record_id"], unique=True)
     # IVFFlat cosine index — lists=100 is an arbitrary starting value (rule of thumb is
     # roughly sqrt(row count); revisit once real row counts exist).
     op.execute(

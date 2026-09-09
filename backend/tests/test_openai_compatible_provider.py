@@ -145,7 +145,7 @@ class TestOpenAiCompatibleLlmProviderRequestShape:
         fake_client_class = make_fake_async_client_class(mock_post)
         with (
             patch("httpx.AsyncClient", fake_client_class),
-            patch("src.app.core.llm.retry.anyio.sleep", AsyncMock()),
+            patch("src.app.core.utils.http_retry.anyio.sleep", AsyncMock()),
         ):
             await provider.complete(request)
 

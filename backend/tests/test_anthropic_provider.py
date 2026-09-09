@@ -113,7 +113,7 @@ class TestAnthropicLlmProviderRetryBehavior:
         mock_post = AsyncMock(side_effect=responses)
         with (
             patch.object(httpx.AsyncClient, "post", mock_post),
-            patch("src.app.core.llm.retry.anyio.sleep", AsyncMock()),
+            patch("src.app.core.utils.http_retry.anyio.sleep", AsyncMock()),
         ):
             result = await provider.complete(request)
 
@@ -133,7 +133,7 @@ class TestAnthropicLlmProviderRetryBehavior:
         fake_client_class = make_fake_async_client_class(mock_post)
         with (
             patch("httpx.AsyncClient", fake_client_class),
-            patch("src.app.core.llm.retry.anyio.sleep", AsyncMock()),
+            patch("src.app.core.utils.http_retry.anyio.sleep", AsyncMock()),
         ):
             await provider.complete(request)
 
@@ -171,7 +171,7 @@ class TestAnthropicLlmProviderRetryBehavior:
         mock_post = AsyncMock(return_value=make_response(429, {"error": "rate limited"}))
         with (
             patch.object(httpx.AsyncClient, "post", mock_post),
-            patch("src.app.core.llm.retry.anyio.sleep", AsyncMock()),
+            patch("src.app.core.utils.http_retry.anyio.sleep", AsyncMock()),
         ):
             with pytest.raises(RateLimitException):
                 await provider.complete(request)

@@ -59,7 +59,11 @@ async def run_memory_extraction_pipeline(
     source_type: str,
     source_channel: str | None,
     content: str,
+    embed: bool = True,
 ) -> dict[str, Any]:
+    """`embed=False` skips the embedding step — used by calendar ingestion (no similarity
+    search need for event content, see decisions-log.md). Every existing call site is
+    unchanged by this default; only `process_calendar_webhook` passes `embed=False`."""
     result = await call_extraction_llm(content)
 
     # One transaction for every write below (all `commit=False`, one `db.commit()` at the
@@ -83,12 +87,13 @@ async def run_memory_extraction_pipeline(
             commit=False,
         )
 
-        embedding_vector = await embed_text(result.summary)
-        await crud_embeddings.create(
-            db=db,
-            object=EmbeddingCreate(memory_record_id=record["id"], embedding=embedding_vector),
-            commit=False,
-        )
+        if embed:
+            embedding_vector = await embed_text(result.summary)
+            await crud_embeddings.create(
+                db=db,
+                object=EmbeddingCreate(memory_record_id=record["id"], embedding=embedding_vector),
+                commit=False,
+            )
 
         # Low/medium-confidence candidates are not silently dropped or auto-created — they
         # stay only in the persisted record's `tasks` JSONB above; nothing promotes them to

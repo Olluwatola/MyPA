@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from ...exceptions.http_exceptions import UnprocessableEntityException
+from ...utils.http_retry import execute_with_retry
 from ..errors import raise_for_llm_status
 from ..provider import (
     LlmCompletionResult,
@@ -19,7 +20,6 @@ from ..provider import (
     LlmProviderResponseFormat,
     LlmUsage,
 )
-from ..retry import execute_with_retry
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_API_VERSION = "2023-06-01"
