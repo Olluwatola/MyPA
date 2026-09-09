@@ -74,6 +74,7 @@ class TestCallback:
             ),
             patch(f"{MODULE}.gmail_get_profile", new=AsyncMock(return_value={"emailAddress": "person@example.com"})),
             patch(f"{MODULE}.crud_integration_connections") as mock_crud,
+            patch(f"{MODULE}.trigger_onboarding_run", new=AsyncMock()) as mock_trigger_onboarding,
         ):
             mock_crud.get = AsyncMock(return_value=None)
             mock_crud.create = AsyncMock()
@@ -84,6 +85,7 @@ class TestCallback:
 
         assert redirect.status_code == 307
         assert mock_crud.create.call_count == 2
+        mock_trigger_onboarding.assert_awaited_once_with(mock_db, user_id)
         created_types = {call.kwargs["object"].type for call in mock_crud.create.call_args_list}
         assert created_types == {"email", "calendar"}
         for call in mock_crud.create.call_args_list:
@@ -106,6 +108,7 @@ class TestCallback:
             ),
             patch(f"{MODULE}.gmail_get_profile", new=AsyncMock(return_value={"emailAddress": "person@example.com"})),
             patch(f"{MODULE}.crud_integration_connections") as mock_crud,
+            patch(f"{MODULE}.trigger_onboarding_run", new=AsyncMock()),
         ):
             mock_crud.get = AsyncMock(return_value=existing)
             mock_crud.update = AsyncMock()

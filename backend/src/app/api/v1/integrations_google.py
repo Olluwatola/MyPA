@@ -36,6 +36,7 @@ from ...core.db.database import async_get_db
 from ...core.exceptions.http_exceptions import NotFoundException, UnauthorizedException
 from ...core.integrations.gmail import gmail_get_profile, gmail_stop_watch
 from ...core.integrations.google_calendar import calendar_stop_watch
+from ...core.integrations.onboarding import trigger_onboarding_run
 from ...core.logger import logging
 from ...core.oauth.google import build_google_authorize_url, exchange_code_for_tokens, revoke_google_token
 from ...core.security import TokenType, verify_token
@@ -119,6 +120,11 @@ async def google_integrations_callback(
             external_account_identifier=mailbox_address,
             connected_at=connected_at,
         )
+
+    # Both connection rows are upserted above — "both connected" is trivially true the
+    # moment this callback succeeds (one combined scope grant). Enqueue the onboarding
+    # ingestion pass directly, unconditionally.
+    await trigger_onboarding_run(db, user_id)
 
     redirect = RedirectResponse(url=settings.FRONTEND_INTEGRATIONS_CALLBACK_URL)
     redirect.delete_cookie(key=STATE_COOKIE)

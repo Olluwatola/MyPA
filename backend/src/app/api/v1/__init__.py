@@ -5,6 +5,7 @@ from .login import router as login_router
 from .logout import router as logout_router
 from .memory import router as memory_router
 from .oauth_google import router as oauth_google_router
+from .onboarding import router as onboarding_router
 from .ready import router as ready_router
 from .refresh import router as refresh_router
 from .users import router as users_router
@@ -20,3 +21,4 @@ router.include_router(users_router)
 router.include_router(memory_router)
 router.include_router(integrations_google_router)
 router.include_router(webhooks_google_calendar_router)
+router.include_router(onboarding_router)

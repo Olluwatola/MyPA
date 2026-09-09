@@ -16,6 +16,7 @@ from .integrations.jobs import (
     process_gmail_notification,
     pull_gmail_pubsub_notifications,
     renew_watches_before_expiry,
+    run_onboarding_ingestion,
 )
 from .llm.embedding_model import init_embedding_model
 from .setup import build_llm_service
@@ -27,7 +28,7 @@ async def on_startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [process_gmail_notification, process_calendar_webhook]
+    functions = [process_gmail_notification, process_calendar_webhook, run_onboarding_ingestion]
     cron_jobs = [
         cron(pull_gmail_pubsub_notifications, second={0, 15, 30, 45}),  # every 15s
         cron(renew_watches_before_expiry, minute=0),  # hourly

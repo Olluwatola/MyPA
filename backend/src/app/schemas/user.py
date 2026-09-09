@@ -1,10 +1,12 @@
 import uuid as uuid_pkg
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from ..core.schemas import PersistentDeletion, TimestampSchema, UUIDSchema
+
+OnboardingStatus = Literal["not_started", "pending", "ready", "completed"]
 
 
 class UserBase(BaseModel):
@@ -21,6 +23,12 @@ class User(TimestampSchema, UserBase, UUIDSchema, PersistentDeletion):
     oauth_sub: str | None = None
     timezone: str = "UTC"
     is_superuser: bool = False
+
+    # Onboarding state — documentation parity only; not load-bearing for `crud_users`,
+    # which is typed against the SQLAlchemy model directly.
+    onboarding_status: OnboardingStatus = "not_started"
+    onboarding_suggested_goals: list[dict[str, Any]] | None = None
+    onboarding_completed_at: datetime | None = None
 
 
 class UserRead(BaseModel):
@@ -71,3 +79,11 @@ class UserDelete(BaseModel):
 
     is_deleted: bool
     deleted_at: datetime
+
+
+class OnboardingStatusRead(BaseModel):
+    """Public response shape for `GET /onboarding/status` and `POST /onboarding/run`."""
+
+    onboarding_status: OnboardingStatus
+    onboarding_suggested_goals: list[dict[str, Any]] | None = None
+    onboarding_completed_at: datetime | None = None

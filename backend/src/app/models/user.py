@@ -1,4 +1,7 @@
-from sqlalchemy import Boolean, String
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.db.database import Base
@@ -32,3 +35,14 @@ class User(Base, UUIDMixin, TimestampMixin):
 
     # Standard get_current_superuser dependency needs this even with no admin feature yet.
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Onboarding state — stored directly on `users`, matching the exact precedent already
+    # set for briefing settings (see erd.md's "Resolved" and decisions-log.md). First
+    # onboarding-state fields on `users` at all.
+    onboarding_status: Mapped[str] = mapped_column(
+        String(20), default="not_started"
+    )  # not_started | pending | ready | completed
+    onboarding_suggested_goals: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=None)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )

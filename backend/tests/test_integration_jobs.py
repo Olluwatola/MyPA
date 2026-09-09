@@ -1,8 +1,9 @@
-"""Unit tests for core/integrations/jobs.py's four ARQ job functions: the Pub/Sub
+"""Unit tests for core/integrations/jobs.py's ARQ job functions: the Pub/Sub
 pull->match->enqueue->ack cycle (unmatched address doesn't crash the batch), Gmail
 notification processing (incl. the history-expired fallback and the client-side
-STARRED/IMPORTANT re-check), calendar webhook processing, and watch renewal (incl. one
-connection's failure not blocking the others)."""
+STARRED/IMPORTANT re-check), calendar webhook processing, onboarding bulk ingestion
+(incl. per-item fault isolation and the outright-failure reset), and watch renewal (incl.
+one connection's failure not blocking the others)."""
 
 import json
 from datetime import UTC, datetime
@@ -213,6 +214,112 @@ class TestProcessCalendarWebhook:
         for call in mock_pipeline.call_args_list:
             assert call.kwargs["source_type"] == "calendar"
             assert call.kwargs["embed"] is False
+
+
+class TestRunOnboardingIngestion:
+    @pytest.mark.asyncio
+    async def test_missing_connection_resets_to_not_started(self, mock_db):
+        with (
+            patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
+            patch(f"{MODULE}.crud_integration_connections") as mock_conn_crud,
+            patch(f"{MODULE}.crud_users") as mock_users_crud,
+            patch(f"{MODULE}.run_memory_extraction_pipeline", new=AsyncMock()) as mock_pipeline,
+        ):
+            # email connection exists, calendar connection is missing.
+            mock_conn_crud.get = AsyncMock(side_effect=[{"id": uuid7()}, None])
+            mock_users_crud.update = AsyncMock()
+
+            await jobs.run_onboarding_ingestion(ctx={}, user_id=str(uuid7()))
+
+        mock_pipeline.assert_not_called()
+        mock_users_crud.update.assert_called_once()
+        assert mock_users_crud.update.call_args.kwargs["object"] == {"onboarding_status": "not_started"}
+
+    @pytest.mark.asyncio
+    async def test_a_failing_item_does_not_abort_the_batch(self, mock_db):
+        """A failing 2nd Gmail message doesn't abort the run — the first message still
+        reaches the pipeline and the job still completes to `ready`."""
+        from src.app.schemas.goal import GoalSynthesisResult, SuggestedGoal
+
+        connection = {"id": uuid7()}
+
+        with (
+            patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
+            patch(f"{MODULE}.crud_integration_connections") as mock_conn_crud,
+            patch(f"{MODULE}.crud_users") as mock_users_crud,
+            patch(f"{MODULE}.get_valid_access_token", new=AsyncMock(return_value="access-token")),
+            patch(f"{MODULE}.gmail_list_messages", new=AsyncMock(return_value=[{"id": "m1"}, {"id": "m2"}])),
+            patch(f"{MODULE}.gmail_get_message", new=AsyncMock(side_effect=lambda token, mid: {"id": mid})),
+            patch(f"{MODULE}.calendar_list_events", new=AsyncMock(return_value=[])),
+            patch(
+                f"{MODULE}.run_memory_extraction_pipeline",
+                new=AsyncMock(side_effect=[{"summary": "s1"}, Exception("boom")]),
+            ) as mock_pipeline,
+            patch(
+                f"{MODULE}.call_goal_synthesis_llm",
+                new=AsyncMock(
+                    return_value=GoalSynthesisResult(suggested_goals=[SuggestedGoal(title="Cross-item goal")])
+                ),
+            ) as mock_synthesis,
+        ):
+            mock_conn_crud.get = AsyncMock(return_value=connection)
+            mock_users_crud.update = AsyncMock()
+
+            await jobs.run_onboarding_ingestion(ctx={}, user_id=str(uuid7()))
+
+        assert mock_pipeline.call_count == 2
+        mock_synthesis.assert_called_once_with([("email", "s1")])
+        mock_users_crud.update.assert_called_once()
+        update_object = mock_users_crud.update.call_args.kwargs["object"]
+        assert update_object["onboarding_status"] == "ready"
+        assert update_object["onboarding_suggested_goals"] == [
+            {"title": "Cross-item goal", "description": None, "horizon": None}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_empty_summaries_skips_synthesis(self, mock_db):
+        connection = {"id": uuid7()}
+
+        with (
+            patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
+            patch(f"{MODULE}.crud_integration_connections") as mock_conn_crud,
+            patch(f"{MODULE}.crud_users") as mock_users_crud,
+            patch(f"{MODULE}.get_valid_access_token", new=AsyncMock(return_value="access-token")),
+            patch(f"{MODULE}.gmail_list_messages", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.calendar_list_events", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.run_memory_extraction_pipeline", new=AsyncMock()) as mock_pipeline,
+            patch(f"{MODULE}.call_goal_synthesis_llm", new=AsyncMock()) as mock_synthesis,
+        ):
+            mock_conn_crud.get = AsyncMock(return_value=connection)
+            mock_users_crud.update = AsyncMock()
+
+            await jobs.run_onboarding_ingestion(ctx={}, user_id=str(uuid7()))
+
+        mock_pipeline.assert_not_called()
+        mock_synthesis.assert_not_called()
+        mock_users_crud.update.assert_called_once()
+        assert mock_users_crud.update.call_args.kwargs["object"] == {
+            "onboarding_status": "ready",
+            "onboarding_suggested_goals": [],
+        }
+
+    @pytest.mark.asyncio
+    async def test_outright_failure_resets_to_not_started(self, mock_db):
+        connection = {"id": uuid7()}
+
+        with (
+            patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
+            patch(f"{MODULE}.crud_integration_connections") as mock_conn_crud,
+            patch(f"{MODULE}.crud_users") as mock_users_crud,
+            patch(f"{MODULE}.get_valid_access_token", new=AsyncMock(side_effect=RuntimeError("token refresh failed"))),
+        ):
+            mock_conn_crud.get = AsyncMock(return_value=connection)
+            mock_users_crud.update = AsyncMock()
+
+            await jobs.run_onboarding_ingestion(ctx={}, user_id=str(uuid7()))
+
+        mock_users_crud.update.assert_called_once()
+        assert mock_users_crud.update.call_args.kwargs["object"] == {"onboarding_status": "not_started"}
 
 
 class TestRenewWatchesBeforeExpiry:

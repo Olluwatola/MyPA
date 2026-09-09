@@ -10,11 +10,13 @@ from typing import Any
 from sqlalchemy import or_, select
 
 from ...crud.crud_integration_connections import crud_integration_connections
+from ...crud.crud_users import crud_users
 from ...models.integration_connection import IntegrationConnection
 from ..config import settings
 from ..crypto import encrypt_token
 from ..db.database import local_session
 from ..llm.extraction import run_memory_extraction_pipeline
+from ..llm.onboarding_synthesis import call_goal_synthesis_llm
 from ..logger import logging
 from .gmail import (
     EMAIL_INGESTION_QUERY,
@@ -156,6 +158,86 @@ async def process_calendar_webhook(ctx: dict[str, Any], connection_id: str) -> N
                 content=content,
                 embed=False,
             )
+
+
+async def run_onboarding_ingestion(ctx: dict[str, Any], user_id: str) -> None:
+    """Full bulk pass over recent Gmail + Calendar content, triggered on-demand — distinct
+    from `process_gmail_notification`/`process_calendar_webhook`, which are delta passes
+    triggered by a webhook. Fired both from the OAuth callback (first run) and from
+    `POST /onboarding/run` (resume) via `trigger_onboarding_run` — always regenerates and
+    overwrites the prior suggestion set, no staleness heuristic.
+
+    Reuses 1.4's exact steady-state ingestion windows (`EMAIL_INGESTION_QUERY`,
+    `CALENDAR_INGESTION_WINDOW`) — neither PRD states an onboarding-specific bound.
+
+    Per-item fault isolation (newly needed here — a full 14-day backlog is a real,
+    higher-likelihood failure mode than an incremental delta) matches the pattern already
+    used by `renew_watches_before_expiry`: one bad message/event is logged and skipped,
+    not allowed to abort the whole batch. An **outer** try/except resets
+    `onboarding_status` to `not_started` on total failure, giving the user a real recovery
+    path via the resume endpoint rather than leaving them stuck on `pending`."""
+    user_uuid = uuid_pkg.UUID(user_id)
+    async with local_session() as db:
+        email_connection = await crud_integration_connections.get(
+            db=db, user_id=user_uuid, type="email", provider="google", revoked_at=None
+        )
+        calendar_connection = await crud_integration_connections.get(
+            db=db, user_id=user_uuid, type="calendar", provider="google", revoked_at=None
+        )
+        if not email_connection or not calendar_connection:
+            logger.warning(f"Onboarding ingestion: missing connection for user {user_id}, aborting.")
+            await crud_users.update(db=db, object={"onboarding_status": "not_started"}, id=user_uuid)
+            return
+
+        try:
+            summaries: list[tuple[str, str]] = []
+
+            email_access_token = await get_valid_access_token(db, email_connection)
+            for message_stub in await gmail_list_messages(email_access_token, EMAIL_INGESTION_QUERY):
+                message_id = message_stub["id"]
+                try:
+                    message = await gmail_get_message(email_access_token, message_id)
+                    content = parse_gmail_message(message)
+                    record = await run_memory_extraction_pipeline(
+                        db=db, user_id=user_uuid, source_type="email", source_channel=None, content=content, embed=True
+                    )
+                    summaries.append(("email", record["summary"]))
+                except Exception:
+                    logger.exception(f"Onboarding ingestion: failed on Gmail message {message_id} for user {user_id}")
+                    continue
+
+            calendar_access_token = await get_valid_access_token(db, calendar_connection)
+            now = datetime.now(UTC)
+            for event in await calendar_list_events(calendar_access_token, now, now + CALENDAR_INGESTION_WINDOW):
+                event_id = event.get("id", "?")
+                try:
+                    content = parse_calendar_event(event)
+                    record = await run_memory_extraction_pipeline(
+                        db=db,
+                        user_id=user_uuid,
+                        source_type="calendar",
+                        source_channel=None,
+                        content=content,
+                        embed=False,
+                    )
+                    summaries.append(("calendar", record["summary"]))
+                except Exception:
+                    logger.exception(f"Onboarding ingestion: failed on calendar event {event_id} for user {user_id}")
+                    continue
+
+            suggested_goals: list[dict[str, Any]] = []
+            if summaries:
+                result = await call_goal_synthesis_llm(summaries)
+                suggested_goals = [g.model_dump(mode="json") for g in result.suggested_goals]
+
+            await crud_users.update(
+                db=db,
+                object={"onboarding_status": "ready", "onboarding_suggested_goals": suggested_goals},
+                id=user_uuid,
+            )
+        except Exception:
+            logger.exception(f"Onboarding ingestion failed outright for user {user_id}; resetting to not_started.")
+            await crud_users.update(db=db, object={"onboarding_status": "not_started"}, id=user_uuid)
 
 
 async def renew_watches_before_expiry(ctx: dict[str, Any]) -> None:
