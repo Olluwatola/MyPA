@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from .login import router as login_router
 from .logout import router as logout_router
+from .memory import router as memory_router
 from .oauth_google import router as oauth_google_router
 from .ready import router as ready_router
 from .refresh import router as refresh_router
@@ -14,3 +15,4 @@ router.include_router(refresh_router)
 router.include_router(logout_router)
 router.include_router(oauth_google_router)
 router.include_router(users_router)
+router.include_router(memory_router)

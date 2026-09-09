@@ -121,6 +121,47 @@ class GoogleOAuthSettings(BaseSettings):
     FRONTEND_OAUTH_CALLBACK_URL: str = "http://localhost:3000/auth/callback"
 
 
+class LlmTierSettings(BaseSettings):
+    """Tier = a quality/cost band (high/medium/low), not a specific provider. Each tier
+    picks a provider profile; model names for ALL THREE providers are pre-filled per tier
+    regardless of which one is actually selected, so flipping *_PROVIDER alone swaps the
+    backing model — no other change needed. Defaults are deliberately mixed across
+    providers (not all-Anthropic) so the running system actually exercises
+    provider-agnosticism, not just supports it in principle — see decisions-log.md."""
+
+    LLM_TIER_HIGH_PROVIDER: str = "anthropic"
+    LLM_TIER_HIGH_ANTHROPIC_MODEL: str = "claude-opus-5"
+    LLM_TIER_HIGH_OPENAI_MODEL: str = "gpt-5"
+    LLM_TIER_HIGH_OLLAMA_MODEL: str = "llama3.1:70b"
+
+    LLM_TIER_MEDIUM_PROVIDER: str = "openai"
+    LLM_TIER_MEDIUM_ANTHROPIC_MODEL: str = "claude-sonnet-5"
+    LLM_TIER_MEDIUM_OPENAI_MODEL: str = "gpt-5-mini"
+    LLM_TIER_MEDIUM_OLLAMA_MODEL: str = "llama3.1:8b"
+
+    LLM_TIER_LOW_PROVIDER: str = "ollama"
+    LLM_TIER_LOW_ANTHROPIC_MODEL: str = "claude-haiku-4-5"
+    LLM_TIER_LOW_OPENAI_MODEL: str = "gpt-5-nano"
+    LLM_TIER_LOW_OLLAMA_MODEL: str = "llama3.1:8b"
+
+    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+    OPENAI_API_KEY: SecretStr = SecretStr("")
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    # Ollama ignores this value's contents, but the OpenAI-compatible adapter always
+    # sends an Authorization header — a placeholder avoids a special-cased "no auth"
+    # branch just for one provider profile.
+    OLLAMA_API_KEY: SecretStr = SecretStr("ollama")
+
+
+class MemorySettings(BaseSettings):
+    EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
+    EMBEDDING_DIMENSION: int = 384  # column type is dimension-fixed at the DB level — a model
+    #                                 swap to a different dimension needs a new migration too.
+    CONFIDENCE_THRESHOLD: float = 0.7  # decided 2026-08-28, added to code for the first time here.
+    MEMORY_RETRIEVAL_TOP_K: int = 5  # no PRD spec — reasonable default, tune later.
+
+
 class Settings(
     AppSettings,
     PostgresSettings,
@@ -135,6 +176,8 @@ class Settings(
     FileLoggerSettings,
     ConsoleLoggerSettings,
     GoogleOAuthSettings,
+    LlmTierSettings,
+    MemorySettings,
 ):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".env"),

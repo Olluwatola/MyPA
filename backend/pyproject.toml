@@ -32,6 +32,8 @@ dependencies = [
     "gunicorn>=23.0.0",
     "structlog>=25.1.0,<=25.5.0",
     "rich>=14.2.0",
+    "sentence-transformers>=3.0.0",
+    "pgvector>=0.3.6",
 ]
 
 [build-system]
@@ -105,7 +107,8 @@ dev = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"  # matches .python-version — numpy's stubs (pulled in transitively by
+# sentence-transformers) use 3.12-only stub syntax and fail to parse under an older target.
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true

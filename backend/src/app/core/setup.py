@@ -23,12 +23,19 @@ from .config import (
     DatabaseSettings,
     EnvironmentOption,
     EnvironmentSettings,
+    LlmTierSettings,
+    MemorySettings,
     RedisCacheSettings,
     RedisQueueSettings,
     settings,
 )
 from .db.database import Base
 from .db.database import async_engine as engine
+from .llm import service as llm_service_module
+from .llm.embedding_model import init_embedding_model
+from .llm.factory import build_llm_provider
+from .llm.provider import LlmProvider, LlmTier
+from .llm.service import LlmService
 from .utils import cache, queue
 
 
@@ -59,6 +66,17 @@ async def close_redis_queue_pool() -> None:
         await queue.pool.aclose()  # type: ignore
 
 
+# -------------- llm --------------
+def build_llm_service() -> None:
+    """Builds all three tiers via `build_llm_provider` and assigns the module-level
+    `llm_service` global — same lifecycle pattern as `core/utils/queue.py`'s `pool`
+    global. Nothing to close at shutdown: plain `httpx.AsyncClient()` per-call, no
+    persistent connection pool to tear down, unlike Redis/queue."""
+    tiers: list[LlmTier] = ["high", "medium", "low"]
+    providers: dict[LlmTier, LlmProvider] = {tier: build_llm_provider(tier, settings) for tier in tiers}
+    llm_service_module.llm_service = LlmService(providers)
+
+
 # -------------- application --------------
 async def set_threadpool_tokens(number_of_tokens: int = 100) -> None:
     limiter = anyio.to_thread.current_default_thread_limiter()
@@ -74,10 +92,19 @@ def lifespan_factory(
         | CORSSettings
         | RedisQueueSettings
         | EnvironmentSettings
+        | LlmTierSettings
+        | MemorySettings
     ),
     create_tables_on_start: bool = True,
+    init_llm_on_start: bool = True,
 ) -> Callable[[FastAPI], _AsyncGeneratorContextManager[Any]]:
-    """Factory to create a lifespan async context manager for a FastAPI app."""
+    """Factory to create a lifespan async context manager for a FastAPI app.
+
+    `init_llm_on_start` gates both the LLM tier build and the embedding-model load, the
+    same way `create_tables_on_start` gates table creation — the embedding model in
+    particular downloads/loads real model weights, so any future test that boots a real
+    `TestClient(app)` for something unrelated (e.g. login) needs a way to skip it rather
+    than blocking on it every time."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator:
@@ -97,6 +124,12 @@ def lifespan_factory(
 
             if create_tables_on_start:
                 await create_tables()
+
+            if init_llm_on_start and isinstance(settings, LlmTierSettings):
+                build_llm_service()
+
+            if init_llm_on_start and isinstance(settings, MemorySettings):
+                await init_embedding_model()
 
             initialization_complete.set()
 
@@ -123,8 +156,11 @@ def create_application(
         | CORSSettings
         | RedisQueueSettings
         | EnvironmentSettings
+        | LlmTierSettings
+        | MemorySettings
     ),
     create_tables_on_start: bool = True,
+    init_llm_on_start: bool = True,
     lifespan: Callable[[FastAPI], _AsyncGeneratorContextManager[Any]] | None = None,
     **kwargs: Any,
 ) -> FastAPI:
@@ -138,6 +174,9 @@ def create_application(
         An instance representing the settings for configuring the FastAPI application.
     create_tables_on_start : bool
         A flag to indicate whether to create database tables on application startup.
+    init_llm_on_start : bool
+        A flag to indicate whether to build the LLM tiers and load the embedding model on
+        application startup — see `lifespan_factory`'s docstring.
     **kwargs
         Additional keyword arguments passed directly to the FastAPI constructor.
 
@@ -161,7 +200,9 @@ def create_application(
 
     # Use custom lifespan if provided, otherwise use default factory
     if lifespan is None:
-        lifespan = lifespan_factory(settings, create_tables_on_start=create_tables_on_start)
+        lifespan = lifespan_factory(
+            settings, create_tables_on_start=create_tables_on_start, init_llm_on_start=init_llm_on_start
+        )
 
     application = FastAPI(lifespan=lifespan, **kwargs)
     application.include_router(router)
