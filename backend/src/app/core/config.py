@@ -201,6 +201,19 @@ class MemorySettings(BaseSettings):
     MEMORY_RETRIEVAL_TOP_K: int = 5  # no PRD spec — reasonable default, tune later.
 
 
+class TelegramSettings(BaseSettings):
+    TELEGRAM_BOT_TOKEN: SecretStr = SecretStr("")
+    # Set once via setWebhook's secret_token param; echoed back on every inbound request
+    # as X-Telegram-Bot-Api-Secret-Token — see api/v1/webhooks_telegram.py.
+    TELEGRAM_WEBHOOK_SECRET: SecretStr = SecretStr("")
+    # Used only to build the t.me deep link — never sent to Telegram's API.
+    TELEGRAM_BOT_USERNAME: str = ""
+    TELEGRAM_WEBHOOK_URL: str = "http://localhost:8000/api/v1/webhooks/telegram"
+    TELEGRAM_LINK_TOKEN_TTL_SECONDS: int = 900
+    TELEGRAM_RATE_LIMIT_MAX_MESSAGES: int = 10
+    TELEGRAM_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+
 class Settings(
     AppSettings,
     PostgresSettings,
@@ -220,6 +233,7 @@ class Settings(
     TokenEncryptionSettings,
     GoogleIntegrationSettings,
     GooglePubSubSettings,
+    TelegramSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".env"),

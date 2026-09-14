@@ -57,6 +57,10 @@ def mock_redis():
     mock_redis.set = AsyncMock(return_value=True)
     mock_redis.delete = AsyncMock(return_value=True)
     mock_redis.ping = AsyncMock(return_value=True)
+    # Telegram linking/rate-limiting (core/telegram/linking.py, rate_limit.py)
+    mock_redis.getdel = AsyncMock(return_value=None)
+    mock_redis.incr = AsyncMock(return_value=1)
+    mock_redis.expire = AsyncMock(return_value=True)
     return mock_redis
 
 

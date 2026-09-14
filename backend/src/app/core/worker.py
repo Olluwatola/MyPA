@@ -21,8 +21,10 @@ from .integrations.jobs import (
     renew_watches_before_expiry,
     run_onboarding_ingestion,
 )
+from .llm.conversation import cleanup_expired_conversation_messages
 from .llm.embedding_model import init_embedding_model
 from .setup import build_llm_service
+from .telegram.jobs import process_telegram_message, send_telegram_message
 
 
 async def on_startup(ctx: dict[str, Any]) -> None:
@@ -44,10 +46,17 @@ class WorkerSettings:
         func(process_gmail_notification, max_tries=5),
         func(process_calendar_webhook, max_tries=5, timeout=600),
         func(run_onboarding_ingestion, max_tries=ONBOARDING_MAX_TRIES, timeout=ONBOARDING_JOB_TIMEOUT_SECONDS),
+        func(send_telegram_message, max_tries=5),
+        # max_tries=5 exists only to let the per-chat processing-lock contention retry
+        # (see jobs.py's docstring) actually happen — a genuinely failed turn still just
+        # propagates uncaught after the lock is held, which ARQ never retries regardless
+        # of max_tries, so this does not reopen the door to duplicate side effects.
+        func(process_telegram_message, max_tries=5),
     ]
     cron_jobs = [
         cron(pull_gmail_pubsub_notifications, second={0, 15, 30, 45}),  # every 15s
         cron(renew_watches_before_expiry, minute=0),  # hourly
+        cron(cleanup_expired_conversation_messages, hour=3, minute=0),  # daily, arbitrary time
     ]
     on_startup = on_startup
     redis_settings = RedisSettings(host=settings.REDIS_QUEUE_HOST, port=settings.REDIS_QUEUE_PORT)
