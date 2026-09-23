@@ -16,7 +16,7 @@ from src.app.api.v1.webhooks_telegram import (
     telegram_webhook,
 )
 from src.app.core.exceptions.http_exceptions import UnauthorizedException
-from src.app.schemas.telegram_webhook import TelegramChat, TelegramMessage, TelegramUpdate
+from src.app.schemas.telegram_webhook import TelegramCallbackQuery, TelegramChat, TelegramMessage, TelegramUpdate
 
 MODULE = "src.app.api.v1.webhooks_telegram"
 SECRET = "the-real-secret"
@@ -26,6 +26,13 @@ def _update(text: str | None, chat_id: int = 123) -> TelegramUpdate:
     if text is None:
         return TelegramUpdate(update_id=1, message=None)
     return TelegramUpdate(update_id=1, message=TelegramMessage(chat=TelegramChat(id=chat_id), text=text))
+
+
+def _callback_update(data: str | None, chat_id: int = 123, callback_id: str = "cq-1") -> TelegramUpdate:
+    message = TelegramMessage(chat=TelegramChat(id=chat_id))
+    return TelegramUpdate(
+        update_id=1, callback_query=TelegramCallbackQuery(id=callback_id, data=data, message=message)
+    )
 
 
 class TestSecretValidation:
@@ -128,6 +135,49 @@ class TestStartLinking:
         assert response.status_code == 204
         mock_link.assert_called_once_with(mock_db, user_id, 42)
         mock_queue.pool.enqueue_job.assert_called_once_with("send_telegram_message", 42, LINKED_CONFIRMATION_MESSAGE)
+
+
+class TestCallbackQuery:
+    @pytest.mark.asyncio
+    async def test_linked_chat_enqueues_callback_processing(self, mock_db):
+        user_id = uuid7()
+        with (
+            patch(f"{MODULE}.settings.TELEGRAM_WEBHOOK_SECRET", SecretStr(SECRET)),
+            patch(f"{MODULE}.crud_telegram_link") as mock_crud,
+            patch(f"{MODULE}.queue") as mock_queue,
+        ):
+            mock_crud.get = AsyncMock(return_value={"user_id": user_id})
+            mock_queue.pool.enqueue_job = AsyncMock()
+
+            response = await telegram_webhook(
+                update=_callback_update("notion_goal:abc", chat_id=99),
+                db=mock_db,
+                x_telegram_bot_api_secret_token=SECRET,
+            )
+
+        assert response.status_code == 204
+        mock_queue.pool.enqueue_job.assert_called_once_with(
+            "process_telegram_callback", str(user_id), 99, "cq-1", "notion_goal:abc"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unlinked_chat_does_not_enqueue(self, mock_db):
+        with (
+            patch(f"{MODULE}.settings.TELEGRAM_WEBHOOK_SECRET", SecretStr(SECRET)),
+            patch(f"{MODULE}.crud_telegram_link") as mock_crud,
+            patch(f"{MODULE}.queue") as mock_queue,
+        ):
+            mock_crud.get = AsyncMock(return_value=None)
+            mock_queue.pool.enqueue_job = AsyncMock()
+
+            response = await telegram_webhook(
+                update=_callback_update("notion_goal:abc", chat_id=99),
+                db=mock_db,
+                x_telegram_bot_api_secret_token=SECRET,
+            )
+
+        assert response.status_code == 204
+        mock_queue.pool.enqueue_job.assert_not_called()
 
 
 class TestOrdinaryMessage:

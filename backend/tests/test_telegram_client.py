@@ -67,5 +67,6 @@ class TestTelegramSetWebhook:
         assert body == {
             "url": "https://example.com/webhook",
             "secret_token": "secret-token",
-            "allowed_updates": ["message"],
+            # "callback_query" added in Feature 1.7 for Notion clarification quick-pick buttons.
+            "allowed_updates": ["message", "callback_query"],
         }

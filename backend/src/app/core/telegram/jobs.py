@@ -10,15 +10,21 @@ import httpx
 from arq import Retry
 
 from ...crud.crud_conversation_messages import crud_conversation_messages
+from ...crud.crud_goals import crud_goals
+from ...crud.crud_notion_block_sync import crud_notion_block_sync
 from ...crud.crud_telegram_link import crud_telegram_link
 from ...schemas.conversation_message import ConversationMessageCreate
+from ..config import settings
 from ..db.database import local_session
 from ..integrations.jobs import _retry_delay_seconds
 from ..llm.conversation import generate_conversation_reply
 from ..llm.extraction import run_memory_extraction_pipeline
+from ..llm.notion_clarification_resolution import resolve_clarification_reply
 from ..logger import logging
+from ..notion.clarification import get_oldest_pending_clarification
+from ..notion.persistence import NotionPersistenceAction, persist_notion_block_outcome
 from ..utils import cache
-from .client import telegram_send_message
+from .client import telegram_answer_callback_query, telegram_send_message
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +57,15 @@ async def process_telegram_message(ctx: dict[str, Any], user_id: str, chat_id: i
     try:
         user_uuid = uuid_pkg.UUID(user_id)
         async with local_session() as db:
+            pending_clarification = await get_oldest_pending_clarification(db, user_uuid)
+            if pending_clarification:
+                # A free-text reply to an outstanding Notion "insufficient context"
+                # question rides this exact same inbound path (PRD §5.6) — resolved and
+                # returned BEFORE the generic extraction+conversation-reply flow below,
+                # since this turn isn't a normal conversational message.
+                await _resolve_pending_clarification(db, ctx["redis"], chat_id, pending_clarification, text)
+                return
+
             await crud_conversation_messages.create(
                 db=db,
                 object=ConversationMessageCreate(user_id=user_uuid, role="user", channel="telegram", content=text),
@@ -82,6 +97,83 @@ async def process_telegram_message(ctx: dict[str, Any], user_id: str, chat_id: i
             await ctx["redis"].enqueue_job("send_telegram_message", chat_id, reply_text)
     finally:
         await cache.client.delete(lock_key)
+
+
+CLARIFICATION_CONFIRMATION_MESSAGE = "Got it — linked."
+
+
+async def _resolve_pending_clarification(
+    db: Any, redis: Any, chat_id: int, pending: dict[str, Any], reply_text: str
+) -> None:
+    candidate_goals_result = await crud_goals.get_multi(
+        db=db,
+        user_id=pending["user_id"],
+        status="open",
+        limit=settings.NOTION_CLARIFICATION_CANDIDATE_GOAL_LIMIT,
+    )
+    candidate_goals = [{"id": str(g["id"]), "title": g["title"]} for g in candidate_goals_result["data"]]
+
+    resolution = await resolve_clarification_reply(
+        reply_text, candidate_goals, block_summary=pending["notion_block_id"]
+    )
+
+    actions: list[NotionPersistenceAction] = []
+    if resolution.matched_existing_goal_id is not None:
+        actions.append(
+            NotionPersistenceAction(kind="link", item_type="goal", item_id=resolution.matched_existing_goal_id)
+        )
+    elif resolution.new_item is not None:
+        actions.append(
+            NotionPersistenceAction(
+                kind="create",
+                item_type=resolution.new_item.item_type,
+                title=resolution.new_item.title,
+                description=resolution.new_item.description,
+                due_date=resolution.new_item.due_date,
+                urgency=resolution.new_item.urgency,
+                effort_level=resolution.new_item.effort_level,
+                horizon=resolution.new_item.horizon,
+                confidence=resolution.new_item.confidence,
+            )
+        )
+
+    await persist_notion_block_outcome(
+        db, pending["user_id"], pending["notion_block_id"], pending["notion_page_id"], reply_text, actions
+    )
+    await crud_notion_block_sync.update(db=db, object={"clarification_requested_at": None}, id=pending["id"])
+    await redis.enqueue_job("send_telegram_message", chat_id, CLARIFICATION_CONFIRMATION_MESSAGE)
+
+
+async def process_telegram_callback(
+    ctx: dict[str, Any], user_id: str, chat_id: int, callback_query_id: str, data: str
+) -> None:
+    """Handles an inline-keyboard quick-pick tap on a Notion clarification question (see
+    `core/notion/clarification.py::escalate_insufficient_context`). Always answers the
+    callback first (clears the tap spinner) regardless of what `data` turns out to mean.
+    Unknown `data` prefixes are a no-op — future-proofs additional callback types
+    without erroring."""
+    await telegram_answer_callback_query(callback_query_id)
+
+    if not data.startswith("notion_goal:"):
+        return
+    try:
+        goal_id = uuid_pkg.UUID(data.removeprefix("notion_goal:"))
+    except ValueError:
+        return
+
+    user_uuid = uuid_pkg.UUID(user_id)
+    async with local_session() as db:
+        pending = await get_oldest_pending_clarification(db, user_uuid)
+        if not pending:
+            return
+
+        actions = [NotionPersistenceAction(kind="link", item_type="goal", item_id=goal_id)]
+        block_summary = f"Notion block {pending['notion_block_id']} (clarified via Telegram quick-pick)"
+        await persist_notion_block_outcome(
+            db, user_uuid, pending["notion_block_id"], pending["notion_page_id"], block_summary, actions
+        )
+        await crud_notion_block_sync.update(db=db, object={"clarification_requested_at": None}, id=pending["id"])
+        await ctx["redis"].enqueue_job("send_telegram_message", chat_id, CLARIFICATION_CONFIRMATION_MESSAGE)
 
 
 async def send_telegram_message(

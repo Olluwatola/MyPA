@@ -40,11 +40,29 @@ async def telegram_send_message(chat_id: int, text: str, reply_markup: dict[str,
     response.raise_for_status()
 
 
+async def telegram_answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
+    """Clears the tap spinner on an inline-keyboard button — Telegram expects every
+    `callback_query` to be answered even when there's nothing to show the user."""
+    payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+    if text is not None:
+        payload["text"] = text
+
+    async with httpx.AsyncClient() as client:
+
+        async def _call() -> httpx.Response:
+            return await client.post(_api_url("answerCallbackQuery"), json=payload, timeout=30.0)
+
+        response = await execute_with_retry(_call, retryable_status_codes=RETRYABLE_STATUS_CODES)
+    response.raise_for_status()
+
+
 async def telegram_set_webhook(webhook_url: str, secret_token: str) -> None:
-    """`allowed_updates=["message"]` — deliberate, no `callback_query`/`edited_message`
-    subscription yet. Called once per environment via `scripts/set_telegram_webhook.py`,
-    never on the request/job path."""
-    payload = {"url": webhook_url, "secret_token": secret_token, "allowed_updates": ["message"]}
+    """`allowed_updates=["message", "callback_query"]` — `callback_query` added for
+    Feature 1.7's Notion clarification quick-pick buttons; `edited_message`/etc still
+    unsubscribed. Called once per environment via `scripts/set_telegram_webhook.py`,
+    never on the request/job path. Re-running this script against a live bot is required
+    for the `callback_query` addition to actually take effect on Telegram's side."""
+    payload = {"url": webhook_url, "secret_token": secret_token, "allowed_updates": ["message", "callback_query"]}
 
     async with httpx.AsyncClient() as client:
 

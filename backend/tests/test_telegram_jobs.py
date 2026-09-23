@@ -48,6 +48,7 @@ class TestProcessTelegramMessage:
         with (
             patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
             patch(f"{MODULE}.cache", new=_mock_cache_lock_available()) as mock_cache,
+            patch(f"{MODULE}.get_oldest_pending_clarification", new=AsyncMock(return_value=None)),
             patch(f"{MODULE}.crud_conversation_messages") as mock_crud,
             patch(f"{MODULE}.run_memory_extraction_pipeline", new=AsyncMock()) as mock_extract,
             patch(f"{MODULE}.generate_conversation_reply", new=AsyncMock(return_value="a reply")) as mock_reply,
@@ -88,6 +89,7 @@ class TestProcessTelegramMessage:
         with (
             patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
             patch(f"{MODULE}.cache", new=_mock_cache_lock_available()),
+            patch(f"{MODULE}.get_oldest_pending_clarification", new=AsyncMock(return_value=None)),
             patch(f"{MODULE}.crud_conversation_messages") as mock_crud,
             patch(f"{MODULE}.run_memory_extraction_pipeline", new=AsyncMock(side_effect=Exception("boom"))),
             patch(f"{MODULE}.generate_conversation_reply", new=AsyncMock(return_value="a reply")) as mock_reply,

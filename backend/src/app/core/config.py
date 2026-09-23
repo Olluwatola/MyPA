@@ -214,6 +214,45 @@ class TelegramSettings(BaseSettings):
     TELEGRAM_RATE_LIMIT_WINDOW_SECONDS: int = 60
 
 
+class NotionSettings(BaseSettings):
+    NOTION_CLIENT_ID: str = ""
+    NOTION_CLIENT_SECRET: SecretStr = SecretStr("")
+    NOTION_INTEGRATIONS_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/notion/callback"
+    # Bootstrapped manually: Notion's own webhook-verification handshake hands us this
+    # value once at setup time (see api/v1/webhooks_notion.py) — there is no API to
+    # create the subscription, only a dashboard flow. Doubles as the HMAC key for every
+    # subsequent signed delivery (Notion doesn't issue a separate webhook secret).
+    NOTION_WEBHOOK_VERIFICATION_TOKEN: SecretStr = SecretStr("")
+    NOTION_WEBHOOK_URL: str = "http://localhost:8000/api/v1/webhooks/notion"
+    FRONTEND_NOTION_INTEGRATIONS_CALLBACK_URL: str = "http://localhost:3000/settings/integrations"
+
+    # A tenant is only eligible for fallback reconciliation if active within this window
+    # — see core/notion/jobs.py::_active_notion_user_ids. Deliberate, temporary substitute
+    # for the PRD's real just-in-time-before-briefing/Scouring trigger (neither exists
+    # yet) — see decisions-log.md.
+    NOTION_RECONCILIATION_ACTIVE_WINDOW_DAYS: int = 30
+
+    # Initial-extraction chunking (page.created path only) — adjustable defaults, not
+    # fixed requirements; see decisions-log.md's 2026-09-23 entry.
+    NOTION_CHUNK_SIZE_BLOCKS: int = 18
+    NOTION_CHUNK_OVERLAP_BLOCKS: int = 4
+    # A page whose chunk count exceeds this is flagged for manual review rather than
+    # partially processed — every chunk call carries the full page text, so total prompt
+    # tokens scale with chunk_count x page_size, not just page_size.
+    NOTION_MAX_CHUNKS_PER_PAGE: int = 20
+
+    # Edit-path 3-stage gate, stage 2: Hamming distance (of a 64-bit SimHash) at or below
+    # this is treated as a non-meaningful edit (typo/formatting) — no LLM call made.
+    NOTION_EDIT_SIMHASH_UNCHANGED_THRESHOLD: int = 3
+    # Initial-extraction cross-chunk dedup: cosine similarity at or above this collapses
+    # two candidate items into one (the higher-confidence one wins).
+    NOTION_DEDUP_SIMILARITY_THRESHOLD: float = 0.90
+    # "Insufficient context" resolution against existing goals (edit path only).
+    NOTION_GOAL_RESOLUTION_SIMILARITY_THRESHOLD: float = 0.80
+    NOTION_GOAL_RESOLUTION_MARGIN: float = 0.05
+    NOTION_CLARIFICATION_CANDIDATE_GOAL_LIMIT: int = 5
+
+
 class Settings(
     AppSettings,
     PostgresSettings,
@@ -234,6 +273,7 @@ class Settings(
     GoogleIntegrationSettings,
     GooglePubSubSettings,
     TelegramSettings,
+    NotionSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".env"),

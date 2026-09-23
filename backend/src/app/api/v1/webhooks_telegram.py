@@ -13,6 +13,11 @@ header vs. wrong value) — same non-leaking pattern as Calendar's webhook.
 **Inbound `/start <token>` is handled as a branch here, not a separate route** — both
 paths need identical prerequisites (secret validation, rate-limit check, payload
 parsing), so splitting them would just duplicate that shared handling.
+
+**`callback_query` (Feature 1.7):** a quick-pick inline-keyboard button tap, subscribed
+via `allowed_updates=["message", "callback_query"]` (see `core/telegram/client.py`).
+Handled as its own branch, ahead of the rate-limit/`/start` logic below, since a button
+tap has nothing to do with either — it's routed straight to `process_telegram_callback`.
 """
 
 import hmac
@@ -50,8 +55,22 @@ async def telegram_webhook(
     if not x_telegram_bot_api_secret_token or not hmac.compare_digest(x_telegram_bot_api_secret_token, expected):
         raise UnauthorizedException(INVALID_WEBHOOK_MESSAGE)
 
+    if update.callback_query is not None:
+        callback_query = update.callback_query
+        if callback_query.message is not None and callback_query.data is not None:
+            link = await crud_telegram_link.get(db=db, telegram_chat_id=callback_query.message.chat.id)
+            if link is not None:
+                await queue.pool.enqueue_job(  # type: ignore[union-attr]
+                    "process_telegram_callback",
+                    str(link["user_id"]),
+                    callback_query.message.chat.id,
+                    callback_query.id,
+                    callback_query.data,
+                )
+        return Response(status_code=204)
+
     if update.message is None or not update.message.text:
-        return Response(status_code=204)  # callback_query/edited_message/etc — no-op this slice
+        return Response(status_code=204)  # edited_message/etc — no-op this slice
 
     chat_id = update.message.chat.id
     text = update.message.text.strip()
