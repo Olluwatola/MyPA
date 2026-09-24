@@ -15,6 +15,11 @@ def make_result(tasks: list[ExtractedTaskCandidate]) -> MemoryExtractionResult:
     return MemoryExtractionResult(summary="Buy milk and call mom", tasks=tasks)
 
 
+def _pass_through(db, user_id, candidates):
+    """Stands in for dedup when a test isn't about dedup: every candidate is new."""
+    return candidates
+
+
 class TestRunMemoryExtractionPipeline:
     @pytest.mark.asyncio
     async def test_persists_record_and_embedding_no_tasks(self, mock_db):
@@ -59,6 +64,7 @@ class TestRunMemoryExtractionPipeline:
             ),
             patch.object(extraction.crud_embeddings, "create", AsyncMock()),
             patch.object(extraction.crud_tasks, "create", AsyncMock(side_effect=RuntimeError("db exploded"))),
+            patch.object(extraction, "resolve_candidates", AsyncMock(side_effect=_pass_through)),
         ):
             with pytest.raises(RuntimeError, match="db exploded"):
                 await extraction.run_memory_extraction_pipeline(
@@ -86,6 +92,7 @@ class TestRunMemoryExtractionPipeline:
             ),
             patch.object(extraction.crud_embeddings, "create", AsyncMock()),
             patch.object(extraction.crud_tasks, "create", AsyncMock()) as mock_task_create,
+            patch.object(extraction, "resolve_candidates", AsyncMock(side_effect=_pass_through)),
         ):
             await extraction.run_memory_extraction_pipeline(
                 db=mock_db,
@@ -156,3 +163,46 @@ class TestRunMemoryExtractionPipeline:
             )
 
         mock_task_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dedup_gets_only_confident_candidates_and_decides_what_is_created(self, mock_db):
+        confident = ExtractedTaskCandidate(title="Send invoice", confidence=0.9)
+        duplicate = ExtractedTaskCandidate(title="Send the invoice", confidence=0.8)
+        unsure = ExtractedTaskCandidate(title="Maybe call someone", confidence=0.3)
+
+        with (
+            patch.object(
+                extraction, "call_extraction_llm", AsyncMock(return_value=make_result([confident, duplicate, unsure]))
+            ),
+            patch.object(extraction, "embed_text", AsyncMock(return_value=[0.1] * 384)),
+            patch.object(extraction.crud_memory_extraction_records, "create", AsyncMock(return_value={"id": uuid4()})),
+            patch.object(extraction.crud_embeddings, "create", AsyncMock()),
+            patch.object(extraction.crud_tasks, "create", AsyncMock()) as mock_task_create,
+            patch.object(extraction, "resolve_candidates", AsyncMock(return_value=[confident])) as mock_resolve,
+        ):
+            await extraction.run_memory_extraction_pipeline(
+                db=mock_db, user_id=uuid4(), source_type="email", source_channel=None, content="Invoice email"
+            )
+
+        assert mock_resolve.call_args.args[2] == [confident, duplicate]
+        mock_task_create.assert_called_once()
+        assert mock_task_create.call_args.kwargs["object"].title == "Send invoice"
+        mock_db.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dedup_failure_rolls_back(self, mock_db):
+        candidate = ExtractedTaskCandidate(title="Send invoice", confidence=0.9)
+        with (
+            patch.object(extraction, "call_extraction_llm", AsyncMock(return_value=make_result([candidate]))),
+            patch.object(extraction, "embed_text", AsyncMock(return_value=[0.1] * 384)),
+            patch.object(extraction.crud_memory_extraction_records, "create", AsyncMock(return_value={"id": uuid4()})),
+            patch.object(extraction.crud_embeddings, "create", AsyncMock()),
+            patch.object(extraction, "resolve_candidates", AsyncMock(side_effect=RuntimeError("embedding failed"))),
+        ):
+            with pytest.raises(RuntimeError, match="embedding failed"):
+                await extraction.run_memory_extraction_pipeline(
+                    db=mock_db, user_id=uuid4(), source_type="email", source_channel=None, content="Invoice email"
+                )
+
+        mock_db.rollback.assert_called_once()
+        mock_db.commit.assert_not_called()

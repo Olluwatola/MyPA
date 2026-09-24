@@ -13,13 +13,48 @@ MODULE = "src.app.core.notion.completion_sync"
 
 class TestDetermineDesiredCheckedState:
     @pytest.mark.asyncio
-    async def test_false_when_no_linked_items(self, mock_db):
+    async def test_none_when_no_linked_items(self, mock_db):
         from src.app.core.notion.completion_sync import determine_desired_checked_state
 
         with patch(f"{MODULE}.crud_notion_block_link") as mock_link:
             mock_link.get_multi = AsyncMock(return_value={"data": []})
             result = await determine_desired_checked_state(mock_db, uuid7(), "block-1")
-        assert result is False
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_deleted_task_ignored(self, mock_db):
+        """One deleted (still-linked) open task must not block the checkbox once every
+        live item is done."""
+        from src.app.core.notion.completion_sync import determine_desired_checked_state
+
+        deleted_id, live_id = uuid7(), uuid7()
+        links = [{"item_type": "task", "item_id": deleted_id}, {"item_type": "task", "item_id": live_id}]
+        rows = {
+            deleted_id: {"status": "open", "is_deleted": True},
+            live_id: {"status": "done", "is_deleted": False},
+        }
+        with (
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link,
+            patch(f"{MODULE}.crud_tasks") as mock_tasks,
+        ):
+            mock_link.get_multi = AsyncMock(return_value={"data": links})
+            mock_tasks.get = AsyncMock(side_effect=lambda db, id: rows[id])
+            result = await determine_desired_checked_state(mock_db, uuid7(), "block-1")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_only_deleted_returns_none(self, mock_db):
+        from src.app.core.notion.completion_sync import determine_desired_checked_state
+
+        links = [{"item_type": "task", "item_id": uuid7()}]
+        with (
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link,
+            patch(f"{MODULE}.crud_tasks") as mock_tasks,
+        ):
+            mock_link.get_multi = AsyncMock(return_value={"data": links})
+            mock_tasks.get = AsyncMock(return_value={"status": "done", "is_deleted": True})
+            result = await determine_desired_checked_state(mock_db, uuid7(), "block-1")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_true_only_when_every_linked_item_is_done(self, mock_db):
@@ -85,6 +120,28 @@ class TestSyncCheckboxFromNotion:
 
         mock_tasks.update.assert_called_once_with(db=mock_db, object={"status": "done"}, id=item_id)
 
+    @pytest.mark.asyncio
+    async def test_deleted_task_not_revived(self, mock_db):
+        from src.app.core.notion.completion_sync import sync_checkbox_from_notion
+
+        deleted_id, live_id = uuid7(), uuid7()
+        links = [{"item_type": "task", "item_id": deleted_id}, {"item_type": "task", "item_id": live_id}]
+        rows = {
+            deleted_id: {"status": "open", "is_deleted": True},
+            live_id: {"status": "open", "is_deleted": False},
+        }
+        with (
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link,
+            patch(f"{MODULE}.crud_tasks") as mock_tasks,
+        ):
+            mock_link.get_multi = AsyncMock(return_value={"data": links})
+            mock_tasks.get = AsyncMock(side_effect=lambda db, id: rows[id])
+            mock_tasks.update = AsyncMock()
+
+            await sync_checkbox_from_notion(mock_db, uuid7(), "block-1", checked=True)
+
+        mock_tasks.update.assert_called_once_with(db=mock_db, object={"status": "done"}, id=live_id)
+
 
 class TestSyncStatusToNotion:
     @pytest.mark.asyncio
@@ -130,4 +187,29 @@ class TestSyncStatusToNotion:
 
             await sync_status_to_notion({}, "task", str(uuid7()))
 
+        mock_update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_live_items_no_notion_write(self):
+        """Deleting a task never changes Notion — if every linked item is deleted, the job
+        doesn't even read the block."""
+        from src.app.core.notion.completion_sync import sync_status_to_notion
+
+        link = {"user_id": uuid7(), "notion_block_id": "block-1"}
+        with (
+            patch(f"{MODULE}.local_session") as mock_session_factory,
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link_crud,
+            patch(f"{MODULE}.crud_notion_connection") as mock_conn_crud,
+            patch(f"{MODULE}.decrypt_token", return_value="token"),
+            patch(f"{MODULE}.determine_desired_checked_state", new=AsyncMock(return_value=None)),
+            patch(f"{MODULE}.get_block", new=AsyncMock()) as mock_get_block,
+            patch(f"{MODULE}.update_block_checkbox", new=AsyncMock()) as mock_update,
+        ):
+            mock_session_factory.return_value.__aenter__.return_value = AsyncMock()
+            mock_link_crud.get = AsyncMock(return_value=link)
+            mock_conn_crud.get = AsyncMock(return_value={"access_token": "enc"})
+
+            await sync_status_to_notion({}, "task", str(uuid7()))
+
+        mock_get_block.assert_not_called()
         mock_update.assert_not_called()

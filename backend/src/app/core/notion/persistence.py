@@ -27,6 +27,7 @@ from ...schemas.task import TaskCreateInternal
 from ..config import settings
 from ..llm.embedding_model import embed_text
 from ..logger import logging
+from ..tasks.sticky import drop_sticky_fields
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +152,10 @@ async def _create_item(
 
 async def _update_item(db: AsyncSession, action: NotionPersistenceAction) -> None:
     """Updates the existing Task/Goal in place — no new memory record, no new link row
-    (the link already exists and is untouched)."""
+    (the link already exists and is untouched). For a task: a deleted (or missing) task is
+    a no-op, and any field the user set by hand (sticky flag) is left alone."""
     assert action.item_id is not None, "item_id is required for an 'update' action"
-    update_fields = {
+    update_fields: dict[str, Any] = {
         key: value
         for key, value in {
             "title": action.title,
@@ -167,7 +169,14 @@ async def _update_item(db: AsyncSession, action: NotionPersistenceAction) -> Non
         return
 
     if action.item_type == "task":
-        await crud_tasks.update(db=db, object=update_fields, id=action.item_id, commit=False)
+        # Read without an is_deleted filter so a deleted task is seen (and skipped) rather
+        # than hitting update()'s NoResultFound and rolling back the whole block.
+        task = await crud_tasks.get(db=db, id=action.item_id)
+        if not task or task["is_deleted"]:
+            return
+        task_fields = drop_sticky_fields(task, update_fields)
+        if task_fields:
+            await crud_tasks.update(db=db, object=task_fields, id=action.item_id, commit=False)
     else:
         # Goal has no urgency/effort_level columns — only title/description apply.
         goal_fields = {k: v for k, v in update_fields.items() if k in ("title", "description")}
@@ -200,7 +209,8 @@ async def _link_existing_item(
 async def _unlink_item(db: AsyncSession, user_id: uuid_pkg.UUID, action: NotionPersistenceAction) -> None:
     """Deletes only the `NotionBlockLink` row — never the Task/Goal itself (no
     `revoked_at` on this table; the item continues to exist, just no longer tracked
-    against this block)."""
+    against this block). Applies to a soft-deleted task's link too: "no longer applies"
+    means the line no longer describes it, so nothing is left there to re-create it from."""
     assert action.item_id is not None, "item_id is required for an 'unlink' action"
     link = await crud_notion_block_link.get(db=db, user_id=user_id, item_type=action.item_type, item_id=action.item_id)
     if link:

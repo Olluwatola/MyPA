@@ -73,7 +73,10 @@ async def _active_notion_user_ids(db: Any, window_days: int) -> set[uuid_pkg.UUI
     stated definition (no existing "last active" concept in this codebase to reuse).
     Deliberately generous (any of three tables): under-counting here means a real edit
     goes un-reconciled up to `window_days` late, an acceptable failure mode for a stated
-    temporary substitute for the PRD's real JIT-before-briefing/Scouring trigger."""
+    temporary substitute for the PRD's real JIT-before-briefing/Scouring trigger.
+
+    Deliberately does NOT filter out soft-deleted tasks: deleting a task is itself user
+    activity, and FastCRUD's soft delete bumps `updated_at` (decisions-log.md 2026-09-24)."""
     threshold = datetime.now(UTC) - timedelta(days=window_days)
 
     conversation_ids = select(ConversationMessage.user_id).where(ConversationMessage.created_at >= threshold)

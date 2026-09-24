@@ -201,6 +201,15 @@ class MemorySettings(BaseSettings):
     MEMORY_RETRIEVAL_TOP_K: int = 5  # no PRD spec — reasonable default, tune later.
 
 
+class TaskSettings(BaseSettings):
+    # Near-duplicate skip for extracted tasks (email/conversation/calendar only — Notion
+    # dedups via its kept notion_block_link rows). Decided 2026-09-24.
+    TASK_DEDUP_SIMILARITY_THRESHOLD: float = 0.85
+    TASK_DEDUP_LOOKBACK_DAYS: int = 60
+    # Upper bound on how many existing tasks one dedup pass compares against (newest first).
+    TASK_DEDUP_MAX_EXISTING_TASKS: int = 500
+
+
 class TelegramSettings(BaseSettings):
     TELEGRAM_BOT_TOKEN: SecretStr = SecretStr("")
     # Set once via setWebhook's secret_token param; echoed back on every inbound request
@@ -269,6 +278,7 @@ class Settings(
     GoogleOAuthSettings,
     LlmTierSettings,
     MemorySettings,
+    TaskSettings,
     TokenEncryptionSettings,
     GoogleIntegrationSettings,
     GooglePubSubSettings,

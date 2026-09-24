@@ -51,10 +51,15 @@ async def _existing_links(db: AsyncSession, user_id: uuid_pkg.UUID, notion_block
 
 
 async def _existing_items_for_prompt(db: AsyncSession, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Soft-deleted tasks are included on purpose, exactly like live ones and with no
+    "deleted" marker: the classifier must still see the item as already handled for this
+    line, or it would re-create it. A genuinely new item on the same line still comes back
+    as an additional item and is created; an update aimed at the deleted task is a no-op
+    in `persistence._update_item`."""
     items = []
     for link in links:
         crud = crud_tasks if link["item_type"] == "task" else crud_goals
-        item = await crud.get(db=db, id=link["item_id"])
+        item = await crud.get(db=db, id=link["item_id"])  # no is_deleted filter — see docstring
         if item:
             items.append(
                 {

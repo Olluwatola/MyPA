@@ -21,6 +21,7 @@ from ...schemas.memory_extraction_record import (
 )
 from ...schemas.task import TaskCreateInternal
 from ..config import settings
+from ..tasks.dedup import resolve_candidates
 from . import service
 from .embedding_model import embed_text
 from .provider import LlmMessage, LlmProviderResponseFormat
@@ -98,22 +99,24 @@ async def run_memory_extraction_pipeline(
         # Low/medium-confidence candidates are not silently dropped or auto-created — they
         # stay only in the persisted record's `tasks` JSONB above; nothing promotes them to
         # a real `Task` row yet (no interrupt/confirm mechanism exists — Feature 1.11, later).
-        for candidate in result.tasks:
-            if candidate.confidence >= settings.CONFIDENCE_THRESHOLD:
-                await crud_tasks.create(
-                    db=db,
-                    object=TaskCreateInternal(
-                        user_id=user_id,
-                        title=candidate.title,
-                        description=candidate.description,
-                        due_date=candidate.due_date,
-                        urgency=candidate.urgency,
-                        effort_level=candidate.effort_level,
-                        source=source_type,  # type: ignore[arg-type]
-                        memory_record_id=record["id"],
-                    ),
-                    commit=False,
-                )
+        # Confident ones go through near-duplicate dedup first (core/tasks/dedup.py), whose
+        # fill-blank updates join this same transaction.
+        confident = [candidate for candidate in result.tasks if candidate.confidence >= settings.CONFIDENCE_THRESHOLD]
+        for candidate in await resolve_candidates(db, user_id, confident):
+            await crud_tasks.create(
+                db=db,
+                object=TaskCreateInternal(
+                    user_id=user_id,
+                    title=candidate.title,
+                    description=candidate.description,
+                    due_date=candidate.due_date,
+                    urgency=candidate.urgency,
+                    effort_level=candidate.effort_level,
+                    source=source_type,  # type: ignore[arg-type]
+                    memory_record_id=record["id"],
+                ),
+                commit=False,
+            )
     except Exception:
         await db.rollback()
         raise

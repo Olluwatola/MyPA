@@ -36,3 +36,13 @@ async def embed_text(text: str) -> list[float]:
 
     embedding = await anyio.to_thread.run_sync(_model.encode, text)
     return embedding.tolist()  # type: ignore[no-any-return]
+
+
+async def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Batch version of `embed_text` — one `encode` call (one thread hop) for the whole
+    list, used by task dedup to embed many short titles at once."""
+    if _model is None:
+        raise RuntimeError("Embedding model not initialized — call init_embedding_model() at startup first.")
+
+    embeddings = await anyio.to_thread.run_sync(_model.encode, texts)
+    return embeddings.tolist()  # type: ignore[no-any-return]

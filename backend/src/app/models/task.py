@@ -6,14 +6,19 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.db.database import Base
-from ..core.db.models import TimestampMixin, UUIDMixin
+from ..core.db.models import SoftDeleteMixin, TimestampMixin, UUIDMixin
 
 
-class Task(Base, UUIDMixin, TimestampMixin):
-    """`urgency_manually_set` is the sticky-override flag: once a user corrects
-    `urgency`, later re-classification passes must not silently overwrite it (see
-    decisions-log.md). `memory_record_id` is nullable — a manually-created task has no
-    extraction record behind it."""
+class Task(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
+    """The four `*_manually_set` columns are sticky-override flags, one per field: once a
+    user edits that field, no automated path (Notion re-classification, dedup fill-blanks,
+    the manual-create AI guess job) may overwrite it (see decisions-log.md, 2026-09-24).
+    `memory_record_id` is nullable — a manually-created task has no extraction record
+    behind it.
+
+    Soft-deleted (`is_deleted`/`deleted_at`). FastCRUD never filters these itself, so
+    every read must pass `is_deleted=False` — except the Notion paths and the dedup pool
+    query, which see deleted tasks on purpose (`core/notion/`, `core/tasks/dedup.py`)."""
 
     __tablename__ = "tasks"
 
@@ -36,3 +41,6 @@ class Task(Base, UUIDMixin, TimestampMixin):
 
     urgency: Mapped[str] = mapped_column(String(10), default="medium")  # low | medium | high
     urgency_manually_set: Mapped[bool] = mapped_column(Boolean, default=False)
+    effort_level_manually_set: Mapped[bool] = mapped_column(Boolean, default=False)
+    title_manually_set: Mapped[bool] = mapped_column(Boolean, default=False)
+    description_manually_set: Mapped[bool] = mapped_column(Boolean, default=False)

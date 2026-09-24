@@ -26,6 +26,7 @@ from .llm.embedding_model import init_embedding_model
 from .notion.completion_sync import sync_status_to_notion
 from .notion.jobs import process_notion_content_updated, reconcile_notion_pages, run_notion_initial_extraction
 from .setup import build_llm_service
+from .tasks.jobs import TASK_FIELD_GUESS_MAX_TRIES, guess_task_fields
 from .telegram.jobs import process_telegram_callback, process_telegram_message, send_telegram_message
 
 
@@ -60,6 +61,7 @@ class WorkerSettings:
         func(run_notion_initial_extraction, max_tries=3, timeout=1800),
         func(process_notion_content_updated, max_tries=5),
         func(sync_status_to_notion, max_tries=5),
+        func(guess_task_fields, max_tries=TASK_FIELD_GUESS_MAX_TRIES),
     ]
     cron_jobs = [
         cron(pull_gmail_pubsub_notifications, second={0, 15, 30, 45}),  # every 15s

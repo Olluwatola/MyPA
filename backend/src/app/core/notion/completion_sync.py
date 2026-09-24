@@ -25,17 +25,25 @@ async def _linked_items(db: AsyncSession, user_id: uuid_pkg.UUID, notion_block_i
     return list(result["data"])
 
 
-async def determine_desired_checked_state(db: AsyncSession, user_id: uuid_pkg.UUID, notion_block_id: str) -> bool:
-    items = await _linked_items(db, user_id, notion_block_id)
-    if not items:
-        return False
+async def determine_desired_checked_state(
+    db: AsyncSession, user_id: uuid_pkg.UUID, notion_block_id: str
+) -> bool | None:
+    """Soft-deleted tasks (their link rows are kept) are ignored — otherwise one deleted
+    task would stop the block's checkbox from ever being checked again. `None` means the
+    block has no live linked items, so there is nothing to decide and Notion must not be
+    touched (deleting a task never changes Notion)."""
+    links = await _linked_items(db, user_id, notion_block_id)
 
-    for link in items:
+    live_items = []
+    for link in links:
         crud = crud_tasks if link["item_type"] == "task" else crud_goals
         item = await crud.get(db=db, id=link["item_id"])
-        if not item or item["status"] != "done":
-            return False
-    return True
+        if item and not item.get("is_deleted"):  # goal rows have no is_deleted key
+            live_items.append(item)
+
+    if not live_items:
+        return None
+    return all(item["status"] == "done" for item in live_items)
 
 
 async def sync_checkbox_from_notion(
@@ -43,14 +51,14 @@ async def sync_checkbox_from_notion(
 ) -> None:
     """Notion -> App. All-or-nothing: every linked item for this block gets its
     status set to match `checked`. Check-before-write per item (skips any item already in
-    the desired status)."""
+    the desired status). A soft-deleted task is never revived or updated."""
     desired_status: Literal["open", "done"] = "done" if checked else "open"
 
     items = await _linked_items(db, user_id, notion_block_id)
     for link in items:
         crud = crud_tasks if link["item_type"] == "task" else crud_goals
         item = await crud.get(db=db, id=link["item_id"])
-        if item and item["status"] != desired_status:
+        if item and not item.get("is_deleted") and item["status"] != desired_status:
             await crud.update(db=db, object={"status": desired_status}, id=link["item_id"])
 
 
@@ -69,6 +77,8 @@ async def sync_status_to_notion(ctx: dict[str, Any], item_type: Literal["task", 
         access_token = decrypt_token(connection["access_token"])
 
         desired_checked = await determine_desired_checked_state(db, link["user_id"], link["notion_block_id"])
+        if desired_checked is None:
+            return
         current_block = await get_block(access_token, link["notion_block_id"])
         current_checked = bool(current_block.raw.get("to_do", {}).get("checked", False))
         if current_checked != desired_checked:
