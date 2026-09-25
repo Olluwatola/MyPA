@@ -12,6 +12,7 @@ from arq.connections import RedisSettings
 from arq.cron import cron
 
 from .config import settings
+from .goals.jobs import GOAL_HORIZON_GUESS_MAX_TRIES, guess_goal_horizon
 from .integrations.jobs import (
     ONBOARDING_JOB_TIMEOUT_SECONDS,
     ONBOARDING_MAX_TRIES,
@@ -62,6 +63,7 @@ class WorkerSettings:
         func(process_notion_content_updated, max_tries=5),
         func(sync_status_to_notion, max_tries=5),
         func(guess_task_fields, max_tries=TASK_FIELD_GUESS_MAX_TRIES),
+        func(guess_goal_horizon, max_tries=GOAL_HORIZON_GUESS_MAX_TRIES),
     ]
     cron_jobs = [
         cron(pull_gmail_pubsub_notifications, second={0, 15, 30, 45}),  # every 15s

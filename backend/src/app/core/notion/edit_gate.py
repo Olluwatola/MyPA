@@ -18,6 +18,7 @@ from ...crud.crud_tasks import crud_tasks
 from ...schemas.notion_block_sync import NotionBlockSyncCreateInternal
 from ...schemas.notion_classification import NotionExtractedItem
 from ..config import settings
+from ..goals.context import load_open_goals, resolve_goal_link
 from ..llm.notion_classification import classify_fresh_block, reclassify_anchored_block
 from .clarification import escalate_insufficient_context
 from .client import NotionBlock
@@ -27,7 +28,9 @@ from .persistence import NotionPersistenceAction, persist_notion_block_outcome
 from .simhash import compute_simhash, hamming_distance
 
 
-def _item_to_create_action(item: NotionExtractedItem) -> NotionPersistenceAction:
+def _item_to_create_action(item: NotionExtractedItem, open_goals: list[dict[str, Any]]) -> NotionPersistenceAction:
+    """Only a task gets an AI goal link, and only when the LLM is confident
+    (core/goals/context.py::resolve_goal_link)."""
     return NotionPersistenceAction(
         kind="create",
         item_type=item.item_type,
@@ -38,6 +41,11 @@ def _item_to_create_action(item: NotionExtractedItem) -> NotionPersistenceAction
         effort_level=item.effort_level,
         horizon=item.horizon,
         confidence=item.confidence,
+        goal_id=(
+            resolve_goal_link(item.goal_ref, item.goal_link_confidence, open_goals)
+            if item.item_type == "task"
+            else None
+        ),
     )
 
 
@@ -51,11 +59,11 @@ async def _existing_links(db: AsyncSession, user_id: uuid_pkg.UUID, notion_block
 
 
 async def _existing_items_for_prompt(db: AsyncSession, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Soft-deleted tasks are included on purpose, exactly like live ones and with no
-    "deleted" marker: the classifier must still see the item as already handled for this
-    line, or it would re-create it. A genuinely new item on the same line still comes back
-    as an additional item and is created; an update aimed at the deleted task is a no-op
-    in `persistence._update_item`."""
+    """Soft-deleted tasks and goals are included on purpose, exactly like live ones and
+    with no "deleted" marker: the classifier must still see the item as already handled for
+    this line, or it would re-create it. A genuinely new item on the same line still comes
+    back as an additional item and is created; an update aimed at the deleted item is a
+    no-op in `persistence._update_item`."""
     items = []
     for link in links:
         crud = crud_tasks if link["item_type"] == "task" else crud_goals
@@ -82,14 +90,15 @@ async def _handle_fresh_classification(
     full_page_text: str,
     target_block: NotionBlock,
 ) -> None:
-    result = await classify_fresh_block(full_page_text, target_block)
+    open_goals = await load_open_goals(db, user_id)
+    result = await classify_fresh_block(full_page_text, target_block, open_goals)
 
     if result.outcome == "not_actionable":
         await persist_notion_block_outcome(db, user_id, notion_block_id, notion_page_id, result.summary, [])
         return
 
     if result.outcome == "actionable":
-        actions = [_item_to_create_action(item) for item in result.items]
+        actions = [_item_to_create_action(item, open_goals) for item in result.items]
         await persist_notion_block_outcome(db, user_id, notion_block_id, notion_page_id, result.summary, actions)
         return
 
@@ -115,7 +124,8 @@ async def _handle_anchored_classification(
     existing_links: list[dict[str, Any]],
 ) -> None:
     existing_items = await _existing_items_for_prompt(db, existing_links)
-    result = await reclassify_anchored_block(full_page_text, target_block, existing_items)
+    open_goals = await load_open_goals(db, user_id)
+    result = await reclassify_anchored_block(full_page_text, target_block, existing_items, open_goals)
 
     actions: list[NotionPersistenceAction] = []
     for outcome in result.existing_items:
@@ -146,7 +156,8 @@ async def _handle_anchored_classification(
                 )
             )
 
-    actions.extend(_item_to_create_action(item) for item in result.additional_items)
+    # Links are only ever made on create — an "updated" outcome above never carries goal_id.
+    actions.extend(_item_to_create_action(item, open_goals) for item in result.additional_items)
 
     await persist_notion_block_outcome(db, user_id, notion_block_id, notion_page_id, result.summary, actions)
 

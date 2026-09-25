@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.db.database import async_get_db
 from ...core.exceptions.http_exceptions import BadRequestException
+from ...core.goals.onboarding import resolve_checked_suggestions
 from ...core.integrations.onboarding import trigger_onboarding_run
 from ...crud.crud_goals import crud_goals
 from ...crud.crud_users import crud_users
@@ -55,13 +56,19 @@ async def submit_onboarding_goals(
 ) -> list[dict[str, Any]]:
     """Zero items in both lists is valid (onboarding is optional per-item) — still marks
     `completed`. `memory_record_id` stays `NULL` for every suggestion-derived goal —
-    synthesis spans many extraction records, not one FK-able one."""
+    synthesis spans many extraction records, not one FK-able one.
+
+    A checked suggestion the user already has a goal for is not created again (its open
+    match gets its blanks filled instead — core/goals/onboarding.py), so the response lists
+    only newly created goals. Typed `additional_goals` are not deduped: like `POST /goals`,
+    the user typed them on purpose."""
     if current_user["onboarding_status"] != "ready":
         raise BadRequestException("Onboarding is not ready for goal submission.")
 
     created: list[dict[str, Any]] = []
     try:
-        for suggestion in payload.checked_suggestions:
+        to_create = await resolve_checked_suggestions(db, current_user["id"], payload.checked_suggestions)
+        for suggestion in to_create:
             created.append(
                 await crud_goals.create(
                     db=db,

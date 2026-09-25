@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field
 
 
 class NotionExtractedItem(BaseModel):
+    """One date field for both kinds: for a goal, `due_date` is its target date (mapped to
+    `Goal.target_date` in core/notion/persistence.py). `goal_ref`/`goal_link_confidence`
+    apply to tasks only — the LLM's pick from the numbered open-goal list in its prompt."""
+
     item_type: Literal["task", "goal"]
     title: str
     description: str | None = None
@@ -21,6 +25,8 @@ class NotionExtractedItem(BaseModel):
     effort_level: Literal["deep_focus", "light_focus", "passive"] | None = None
     horizon: Literal["short_term", "long_term"] | None = None
     confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+    goal_ref: int | None = None
+    goal_link_confidence: Annotated[float | None, Field(ge=0.0, le=1.0)] = None
 
 
 # -------------- edit-path (one call per changed block) --------------

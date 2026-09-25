@@ -210,6 +210,20 @@ class TaskSettings(BaseSettings):
     TASK_DEDUP_MAX_EXISTING_TASKS: int = 500
 
 
+class GoalSettings(BaseSettings):
+    # Near-duplicate skip for goals auto-created from chat/email and for onboarding
+    # suggestions (Notion dedups via notion_block_link). Same values as tasks today, kept
+    # separate so each can be tuned on real data. Decided 2026-09-24.
+    GOAL_DEDUP_SIMILARITY_THRESHOLD: float = 0.85
+    GOAL_DEDUP_LOOKBACK_DAYS: int = 60
+    GOAL_DEDUP_MAX_EXISTING_GOALS: int = 200
+    # Cap on the open goals shown to any LLM prompt (extraction, Notion, chat) and compared
+    # by Notion goal resolution — newest first.
+    GOAL_CONTEXT_MAX_OPEN_GOALS: int = 30
+    # Minimum LLM-reported confidence to accept an AI task -> goal link.
+    TASK_GOAL_LINK_CONFIDENCE_THRESHOLD: float = 0.7
+
+
 class TelegramSettings(BaseSettings):
     TELEGRAM_BOT_TOKEN: SecretStr = SecretStr("")
     # Set once via setWebhook's secret_token param; echoed back on every inbound request
@@ -279,6 +293,7 @@ class Settings(
     LlmTierSettings,
     MemorySettings,
     TaskSettings,
+    GoalSettings,
     TokenEncryptionSettings,
     GoogleIntegrationSettings,
     GooglePubSubSettings,

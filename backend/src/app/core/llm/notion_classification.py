@@ -19,10 +19,19 @@ import json
 from typing import Any
 
 from ...schemas.notion_classification import NotionAnchoredClassificationResult, NotionFreshClassificationResult
+from ..goals.context import format_goals_for_prompt
 from ..notion.client import NotionBlock
 from . import service
 from .provider import LlmMessage, LlmProviderResponseFormat
 from .validation_retry import run_with_validation_retry
+
+# Shared with notion_initial_extraction.py — the same linking rule everywhere the AI
+# creates a Notion task (core/goals/context.py::resolve_goal_link decides what's kept).
+GOAL_LINK_INSTRUCTIONS = (
+    "For a TASK only, if one of the user's listed open goals is clearly what it serves, set goal_ref "
+    "to that goal's number and goal_link_confidence honestly; otherwise leave both empty, and never "
+    "refer to a goal that isn't listed. For a goal, due_date means its target date."
+)
 
 FRESH_SYSTEM_PROMPT = (
     "You classify a single block of user-written Notion content for a personal assistant app. "
@@ -34,7 +43,7 @@ FRESH_SYSTEM_PROMPT = (
     "'insufficient_context' (the block reads as actionable but can't be attributed to any "
     "specific project/goal even with the full page as context). For each actionable item, infer "
     "urgency and effort_level for tasks, and score confidence honestly — reserve high confidence "
-    "(>= 0.7) for unambiguous commitments."
+    "(>= 0.7) for unambiguous commitments. " + GOAL_LINK_INSTRUCTIONS
 )
 
 ANCHORED_SYSTEM_PROMPT = (
@@ -46,7 +55,7 @@ ANCHORED_SYSTEM_PROMPT = (
     "or add entries. Separately, decide whether the new text introduces any ADDITIONAL item beyond "
     "what's already linked, and whether — despite the edit — the block's meaning is now unclear "
     "enough to need clarification (insufficient_context=true). Use the full page text only as "
-    "background context, never as new blocks to classify."
+    "background context, never as new blocks to classify. For ADDITIONAL items only: " + GOAL_LINK_INSTRUCTIONS
 )
 
 FRESH_RESPONSE_FORMAT = LlmProviderResponseFormat(
@@ -64,14 +73,23 @@ def _block_prompt(full_page_text: str, target_block: NotionBlock) -> str:
     )
 
 
-async def classify_fresh_block(full_page_text: str, target_block: NotionBlock) -> NotionFreshClassificationResult:
+def open_goals_prompt(open_goals: list[dict[str, Any]]) -> str:
+    """The numbered open-goal block appended to a Notion prompt, or "" when there are none."""
+    return f"\n\nThe user's open goals:\n{format_goals_for_prompt(open_goals)}" if open_goals else ""
+
+
+async def classify_fresh_block(
+    full_page_text: str, target_block: NotionBlock, open_goals: list[dict[str, Any]]
+) -> NotionFreshClassificationResult:
     assert service.llm_service is not None, "llm_service not initialized — call build_llm_service() at startup first."
     return await run_with_validation_retry(
         llm_service=service.llm_service,
         tier="high",
         messages=[
             LlmMessage(role="system", content=FRESH_SYSTEM_PROMPT),
-            LlmMessage(role="user", content=_block_prompt(full_page_text, target_block)),
+            LlmMessage(
+                role="user", content=_block_prompt(full_page_text, target_block) + open_goals_prompt(open_goals)
+            ),
         ],
         response_format=FRESH_RESPONSE_FORMAT,
         validate=NotionFreshClassificationResult.model_validate_json,
@@ -79,13 +97,17 @@ async def classify_fresh_block(full_page_text: str, target_block: NotionBlock) -
 
 
 async def reclassify_anchored_block(
-    full_page_text: str, target_block: NotionBlock, existing_items: list[dict[str, Any]]
+    full_page_text: str,
+    target_block: NotionBlock,
+    existing_items: list[dict[str, Any]],
+    open_goals: list[dict[str, Any]],
 ) -> NotionAnchoredClassificationResult:
     assert service.llm_service is not None, "llm_service not initialized — call build_llm_service() at startup first."
     existing_items_text = json.dumps(existing_items, default=str)
     content = (
         f"{_block_prompt(full_page_text, target_block)}\n\n"
         f"Currently-linked items for this block:\n{existing_items_text}"
+        f"{open_goals_prompt(open_goals)}"
     )
     return await run_with_validation_retry(
         llm_service=service.llm_service,

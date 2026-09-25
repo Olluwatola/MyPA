@@ -471,6 +471,10 @@ class TestRunOnboardingIngestion:
             ) as mock_synthesis,
             patch(f"{MODULE}.is_item_unchanged", new=AsyncMock(return_value=(False, None))),
             patch(f"{MODULE}.mark_item_synced", new=AsyncMock()),
+            patch(
+                f"{MODULE}.drop_existing_goal_suggestions",
+                new=AsyncMock(side_effect=lambda db, user_id, suggestions: suggestions),
+            ),
         ):
             mock_conn_crud.get = AsyncMock(return_value=connection)
             mock_users_crud.update = AsyncMock()
@@ -722,3 +726,47 @@ class TestRenewWatchesBeforeExpiry:
 
         # The healthy row still got renewed despite the failing row raising.
         mock_crud.update.assert_called_once()
+
+
+class TestOnboardingSuggestionDedup:
+    @pytest.mark.asyncio
+    async def test_suggestions_the_user_already_has_are_not_saved(self, mock_db):
+        """Required proof (e), synthesis half: the stored checklist is what's left AFTER the
+        'already have it' filter (e.g. a goal auto-created from an email earlier in the
+        same run)."""
+        from src.app.schemas.goal import GoalSynthesisResult, SuggestedGoal
+
+        existing_dup = SuggestedGoal(title="Close the seed round")
+        fresh = SuggestedGoal(title="Hire a designer")
+        user_id = uuid7()
+
+        with (
+            patch(f"{MODULE}.local_session", new=fake_local_session(mock_db)),
+            patch(f"{MODULE}.crud_integration_connections") as mock_conn_crud,
+            patch(f"{MODULE}.crud_users") as mock_users_crud,
+            patch(f"{MODULE}.get_valid_access_token", new=AsyncMock(return_value="access-token")),
+            patch(f"{MODULE}.gmail_list_messages", new=AsyncMock(return_value=[{"id": "m1"}])),
+            patch(f"{MODULE}.gmail_get_message", new=AsyncMock(return_value={"id": "m1"})),
+            patch(f"{MODULE}.calendar_list_events", new=AsyncMock(return_value=[])),
+            patch(
+                f"{MODULE}.run_memory_extraction_pipeline",
+                new=AsyncMock(return_value={"summary": "s1", "id": uuid7()}),
+            ),
+            patch(
+                f"{MODULE}.call_goal_synthesis_llm",
+                new=AsyncMock(return_value=GoalSynthesisResult(suggested_goals=[existing_dup, fresh])),
+            ),
+            patch(f"{MODULE}.is_item_unchanged", new=AsyncMock(return_value=(False, None))),
+            patch(f"{MODULE}.mark_item_synced", new=AsyncMock()),
+            patch(f"{MODULE}.drop_existing_goal_suggestions", new=AsyncMock(return_value=[fresh])) as mock_filter,
+        ):
+            mock_conn_crud.get = AsyncMock(return_value={"id": uuid7()})
+            mock_users_crud.update = AsyncMock()
+
+            await jobs.run_onboarding_ingestion(ctx={}, user_id=str(user_id))
+
+        assert mock_filter.call_args.args[1:] == (user_id, [existing_dup, fresh])
+        update_object = mock_users_crud.update.call_args.kwargs["object"]
+        assert update_object["onboarding_suggested_goals"] == [
+            {"title": "Hire a designer", "description": None, "horizon": None}
+        ]

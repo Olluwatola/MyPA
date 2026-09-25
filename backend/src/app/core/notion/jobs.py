@@ -75,8 +75,8 @@ async def _active_notion_user_ids(db: Any, window_days: int) -> set[uuid_pkg.UUI
     goes un-reconciled up to `window_days` late, an acceptable failure mode for a stated
     temporary substitute for the PRD's real JIT-before-briefing/Scouring trigger.
 
-    Deliberately does NOT filter out soft-deleted tasks: deleting a task is itself user
-    activity, and FastCRUD's soft delete bumps `updated_at` (decisions-log.md 2026-09-24)."""
+    Deliberately does NOT filter out soft-deleted tasks or goals: deleting one is itself
+    user activity, and FastCRUD's soft delete bumps `updated_at` (decisions-log.md 2026-09-24)."""
     threshold = datetime.now(UTC) - timedelta(days=window_days)
 
     conversation_ids = select(ConversationMessage.user_id).where(ConversationMessage.created_at >= threshold)

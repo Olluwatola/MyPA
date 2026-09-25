@@ -68,7 +68,11 @@ async def escalate_insufficient_context(
         return
 
     goals_result = await crud_goals.get_multi(
-        db=db, user_id=user_id, status="open", limit=settings.NOTION_CLARIFICATION_CANDIDATE_GOAL_LIMIT
+        db=db,
+        user_id=user_id,
+        status="open",
+        is_deleted=False,
+        limit=settings.NOTION_CLARIFICATION_CANDIDATE_GOAL_LIMIT,
     )
     candidate_goals: list[dict[str, Any]] = list(goals_result["data"])
 

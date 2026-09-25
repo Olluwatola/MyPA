@@ -29,6 +29,13 @@ def _block(block_id: str, text: str, edited_at: datetime, block_type: str = "par
     )
 
 
+@pytest.fixture(autouse=True)
+def no_open_goals():
+    """Most tests don't care about goal linking — the user has no open goals."""
+    with patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=[])) as mock_load:
+        yield mock_load
+
+
 class TestUnchangedTimestamp:
     @pytest.mark.asyncio
     async def test_no_fetch_or_llm_call_when_timestamp_unchanged(self, mock_db):
@@ -233,3 +240,143 @@ class TestAnchoredWithDeletedTask:
         mock_update.assert_not_called()
         mock_create.assert_not_called()
         mock_db.commit.assert_called_once()
+
+
+class TestAnchoredWithDeletedGoal:
+    """Required proof (b) for goals: a soft-deleted goal keeps its link row, so its Notion
+    line stays anchored and the goal is never re-created — a new item on the line still is."""
+
+    @pytest.mark.asyncio
+    async def test_deleted_goal_is_shown_to_classifier_and_only_new_item_created(self, mock_db):
+        block, existing_sync = TestAnchoredWithDeletedTask._changed_block_setup()
+        deleted_goal_id = uuid7()
+        links = [{"item_type": "goal", "item_id": deleted_goal_id}]
+        deleted_goal = {"id": deleted_goal_id, "title": "Launch ClientPal", "description": None, "is_deleted": True}
+        anchored_result = NotionAnchoredClassificationResult(
+            summary="launch clientpal, book the venue",
+            existing_items=[NotionAnchoredItemOutcome(item_id=deleted_goal_id, disposition="unchanged")],
+            additional_items=[NotionExtractedItem(item_type="task", title="Book the venue", confidence=0.9)],
+        )
+
+        with (
+            patch(f"{MODULE}.crud_notion_block_sync") as mock_sync,
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link,
+            patch(f"{MODULE}.crud_goals") as mock_goals,
+            patch(f"{MODULE}.classify_fresh_block", new=AsyncMock()) as mock_fresh,
+            patch(f"{MODULE}.reclassify_anchored_block", new=AsyncMock(return_value=anchored_result)) as mock_anchored,
+            patch(f"{MODULE}.persist_notion_block_outcome", new=AsyncMock()) as mock_persist,
+        ):
+            mock_sync.get = AsyncMock(return_value=existing_sync)
+            mock_sync.update = AsyncMock()
+            mock_link.get_multi = AsyncMock(return_value={"data": links})
+            mock_goals.get = AsyncMock(return_value=deleted_goal)
+
+            await process_changed_block(mock_db, AsyncMock(), uuid7(), "page-1", "block-1", [block])
+
+        mock_fresh.assert_not_called()
+        assert "is_deleted" not in mock_goals.get.call_args.kwargs
+        assert mock_anchored.call_args.args[2] == [
+            {"item_id": str(deleted_goal_id), "item_type": "goal", "title": "Launch ClientPal", "description": None}
+        ]
+        actions = mock_persist.call_args.args[5]
+        assert [(action.kind, action.item_type, action.title) for action in actions] == [
+            ("create", "task", "Book the venue")
+        ]
+
+    @pytest.mark.asyncio
+    async def test_update_aimed_at_deleted_goal_changes_nothing_end_to_end(self, mock_db):
+        from src.app.crud.crud_goals import crud_goals
+
+        block, existing_sync = TestAnchoredWithDeletedTask._changed_block_setup()
+        deleted_goal_id = uuid7()
+        links = [{"item_type": "goal", "item_id": deleted_goal_id}]
+        deleted_goal = {
+            "id": deleted_goal_id,
+            "title": "Launch ClientPal",
+            "description": None,
+            "is_deleted": True,
+            "title_manually_set": False,
+            "description_manually_set": False,
+        }
+        anchored_result = NotionAnchoredClassificationResult(
+            summary="launch clientpal in march",
+            existing_items=[
+                NotionAnchoredItemOutcome(
+                    item_id=deleted_goal_id, disposition="updated", updated_title="Launch ClientPal in March"
+                )
+            ],
+        )
+
+        with (
+            patch(f"{MODULE}.crud_notion_block_sync") as mock_sync,
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link,
+            patch(f"{MODULE}.reclassify_anchored_block", new=AsyncMock(return_value=anchored_result)),
+            patch.object(crud_goals, "get", new=AsyncMock(return_value=deleted_goal)),
+            patch.object(crud_goals, "update", new=AsyncMock()) as mock_update,
+            patch.object(crud_goals, "create", new=AsyncMock()) as mock_create,
+            patch(f"{PERSISTENCE}.crud_memory_extraction_records") as mock_records,
+            patch(f"{PERSISTENCE}.crud_embeddings") as mock_embeddings,
+            patch(f"{PERSISTENCE}.embed_text", new=AsyncMock(return_value=[0.0] * 384)),
+        ):
+            mock_sync.get = AsyncMock(return_value=existing_sync)
+            mock_sync.update = AsyncMock()
+            mock_link.get_multi = AsyncMock(return_value={"data": links})
+            mock_records.create = AsyncMock(return_value={"id": uuid7()})
+            mock_embeddings.create = AsyncMock()
+            mock_db.commit = AsyncMock()
+            mock_db.rollback = AsyncMock()
+
+            await process_changed_block(mock_db, AsyncMock(), uuid7(), "page-1", "block-1", [block])
+
+        mock_update.assert_not_called()
+        mock_create.assert_not_called()
+        mock_db.commit.assert_called_once()
+
+
+class TestNotionTaskGoalLink:
+    """Required proof (f), Notion half: a Notion-created task is linked to an open goal
+    only when the classifier is confident; goals themselves never get a link."""
+
+    GOAL_ID = uuid7()
+    OPEN_GOALS = [{"id": GOAL_ID, "title": "Launch ClientPal", "description": None, "horizon": "short_term"}]
+
+    async def _fresh_actions(self, mock_db, items):
+        block = _block("block-1", "draft the landing page", datetime(2026, 1, 2, tzinfo=UTC))
+        fresh_result = NotionFreshClassificationResult(outcome="actionable", summary="landing page", items=items)
+        with (
+            patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=self.OPEN_GOALS)),
+            patch(f"{MODULE}.crud_notion_block_sync") as mock_sync,
+            patch(f"{MODULE}.crud_notion_block_link") as mock_link,
+            patch(f"{MODULE}.classify_fresh_block", new=AsyncMock(return_value=fresh_result)) as mock_classify,
+            patch(f"{MODULE}.persist_notion_block_outcome", new=AsyncMock()) as mock_persist,
+        ):
+            mock_sync.get = AsyncMock(return_value=None)
+            mock_sync.create = AsyncMock(return_value={"id": uuid7()})
+            mock_link.get_multi = AsyncMock(return_value={"data": []})
+            await process_changed_block(mock_db, AsyncMock(), uuid7(), "page-1", "block-1", [block])
+        return mock_persist.call_args.args[5], mock_classify
+
+    @pytest.mark.asyncio
+    async def test_confident_task_link_is_carried_to_persistence(self, mock_db):
+        item = NotionExtractedItem(
+            item_type="task", title="Draft landing page", confidence=0.9, goal_ref=1, goal_link_confidence=0.9
+        )
+        actions, mock_classify = await self._fresh_actions(mock_db, [item])
+        assert actions[0].goal_id == self.GOAL_ID
+        assert mock_classify.call_args.args[2] == self.OPEN_GOALS
+
+    @pytest.mark.asyncio
+    async def test_unsure_task_link_is_dropped(self, mock_db):
+        item = NotionExtractedItem(
+            item_type="task", title="Draft landing page", confidence=0.9, goal_ref=1, goal_link_confidence=0.5
+        )
+        actions, _ = await self._fresh_actions(mock_db, [item])
+        assert actions[0].goal_id is None
+
+    @pytest.mark.asyncio
+    async def test_goal_item_never_gets_a_link(self, mock_db):
+        item = NotionExtractedItem(
+            item_type="goal", title="Grow the newsletter", confidence=0.9, goal_ref=1, goal_link_confidence=0.95
+        )
+        actions, _ = await self._fresh_actions(mock_db, [item])
+        assert actions[0].goal_id is None

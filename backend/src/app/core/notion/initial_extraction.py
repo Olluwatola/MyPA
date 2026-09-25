@@ -18,6 +18,7 @@ from ...schemas.memory_extraction_record import MemoryExtractionRecordCreate
 from ...schemas.notion_block_sync import NotionBlockSyncCreateInternal
 from ...schemas.notion_classification import NotionChunkExtractedItem
 from ..config import settings
+from ..goals.context import load_open_goals, resolve_goal_link
 from ..llm.embedding_model import embed_text
 from ..llm.notion_initial_extraction import extract_chunk
 from ..llm.similarity import cosine_similarity
@@ -81,8 +82,13 @@ async def run_initial_extraction(db: AsyncSession, user_id: uuid_pkg.UUID, acces
         return
 
     full_page_text = "\n".join(block.plain_text for block in blocks if block.plain_text)
+    # Loaded once per page, so a confident task can be linked to one of them. A goal created
+    # from this same page can't be linked (it doesn't exist yet) — open item N-29.
+    open_goals = await load_open_goals(db, user_id)
 
-    results = await asyncio.gather(*(extract_chunk(full_page_text, chunk) for chunk in chunks), return_exceptions=True)
+    results = await asyncio.gather(
+        *(extract_chunk(full_page_text, chunk, open_goals) for chunk in chunks), return_exceptions=True
+    )
 
     all_items: list[NotionChunkExtractedItem] = []
     for chunk, result in zip(chunks, results, strict=True):
@@ -118,6 +124,11 @@ async def run_initial_extraction(db: AsyncSession, user_id: uuid_pkg.UUID, acces
                     effort_level=item.effort_level,
                     horizon=item.horizon,
                     confidence=item.confidence,
+                    goal_id=(
+                        resolve_goal_link(item.goal_ref, item.goal_link_confidence, open_goals)
+                        if item.item_type == "task"
+                        else None
+                    ),
                 )
                 for item in items
             ]

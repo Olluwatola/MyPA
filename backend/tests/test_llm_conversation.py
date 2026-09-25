@@ -41,6 +41,7 @@ class TestGenerateConversationReply:
             patch(f"{MODULE}.crud_conversation_messages") as mock_crud,
             patch(f"{MODULE}.search_similar_memories", new=AsyncMock(return_value=[])),
             patch(f"{MODULE}.service.llm_service", mock_llm_service),
+            patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=[])),
         ):
             mock_crud.get_multi = AsyncMock(return_value={"data": rows})
 
@@ -74,6 +75,7 @@ class TestGenerateConversationReply:
             patch(f"{MODULE}.crud_conversation_messages") as mock_crud,
             patch(f"{MODULE}.search_similar_memories", new=AsyncMock(return_value=[memory_record])),
             patch(f"{MODULE}.service.llm_service", mock_llm_service),
+            patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=[])),
         ):
             mock_crud.get_multi = AsyncMock(return_value={"data": rows})
 
@@ -84,6 +86,35 @@ class TestGenerateConversationReply:
         assert messages[1].role == "system"
         assert "user prefers concise replies" in messages[1].content
         assert messages[2].content == "hello"  # chronological history starts right after the memory block
+
+    @pytest.mark.asyncio
+    async def test_open_goals_are_added_as_context(self, mock_db):
+        """Required proof (h), chat half: the reply sees the user's open goals. Paused,
+        dropped, done and deleted goals are excluded by `load_open_goals` itself
+        (tests/test_goal_context.py), the only source of this list."""
+        user_id = uuid4()
+        completion = LlmCompletionResult(
+            text="a reply", model="m", provider="p", usage=LlmUsage(prompt_tokens=1, completion_tokens=1)
+        )
+        mock_llm_service = MagicMock()
+        mock_llm_service.complete = AsyncMock(return_value=completion)
+        goals = [{"title": "Launch ClientPal", "horizon": "short_term"}, {"title": "Read more", "horizon": None}]
+
+        with (
+            patch(f"{MODULE}.crud_conversation_messages") as mock_crud,
+            patch(f"{MODULE}.search_similar_memories", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.service.llm_service", mock_llm_service),
+            patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=goals)) as mock_load,
+        ):
+            mock_crud.get_multi = AsyncMock(return_value={"data": _history_rows(user_id)})
+            await conversation.generate_conversation_reply(mock_db, user_id)
+
+        mock_load.assert_awaited_once_with(mock_db, user_id)
+        messages = mock_llm_service.complete.call_args.kwargs["messages"]
+        assert messages[1].role == "system"
+        assert "- Launch ClientPal (short term)" in messages[1].content
+        assert "- Read more" in messages[1].content
+        assert messages[2].content == "hello"
 
 
 class TestCleanupExpiredConversationMessages:

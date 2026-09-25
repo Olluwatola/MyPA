@@ -50,6 +50,9 @@ class TestEscalateInsufficientContext:
         args = mock_redis.enqueue_job.call_args.args
         assert args[0] == "send_telegram_message"
         assert args[1] == 42
+        # quick-pick candidates are open, non-deleted goals only
+        goal_filters = mock_goals.get_multi.call_args.kwargs
+        assert goal_filters["status"] == "open" and goal_filters["is_deleted"] is False
 
 
 class TestPendingClarificationRouting:
@@ -92,9 +95,11 @@ class TestPendingClarificationRouting:
             patch(f"{TELEGRAM_JOBS_MODULE}.get_oldest_pending_clarification", new=AsyncMock(return_value=pending)),
             patch(f"{TELEGRAM_JOBS_MODULE}.persist_notion_block_outcome", new=AsyncMock()) as mock_persist,
             patch(f"{TELEGRAM_JOBS_MODULE}.crud_notion_block_sync") as mock_sync,
+            patch(f"{TELEGRAM_JOBS_MODULE}.crud_goals") as mock_goals,
         ):
             mock_session_factory.return_value.__aenter__.return_value = AsyncMock()
             mock_sync.update = AsyncMock()
+            mock_goals.get = AsyncMock(return_value={"id": goal_id})
             ctx = {"redis": AsyncMock()}
 
             await process_telegram_callback(ctx, str(pending["user_id"]), 42, "cq-1", f"notion_goal:{goal_id}")
@@ -102,6 +107,34 @@ class TestPendingClarificationRouting:
         mock_answer.assert_called_once_with("cq-1")
         mock_persist.assert_called_once()
         mock_sync.update.assert_called_once()
+        goal_filters = mock_goals.get.call_args.kwargs
+        assert goal_filters["user_id"] == pending["user_id"] and goal_filters["is_deleted"] is False
+
+    @pytest.mark.asyncio
+    async def test_callback_for_deleted_or_foreign_goal_is_not_linked(self):
+        """The tapped goal was deleted since the question was sent (or the callback data
+        names someone else's goal): nothing is linked, the question stays pending."""
+        from src.app.core.telegram.jobs import GOAL_UNAVAILABLE_MESSAGE, process_telegram_callback
+
+        pending = {"id": uuid7(), "user_id": uuid7(), "notion_block_id": "block-1", "notion_page_id": "page-1"}
+        with (
+            patch(f"{TELEGRAM_JOBS_MODULE}.telegram_answer_callback_query", new=AsyncMock()),
+            patch(f"{TELEGRAM_JOBS_MODULE}.local_session") as mock_session_factory,
+            patch(f"{TELEGRAM_JOBS_MODULE}.get_oldest_pending_clarification", new=AsyncMock(return_value=pending)),
+            patch(f"{TELEGRAM_JOBS_MODULE}.persist_notion_block_outcome", new=AsyncMock()) as mock_persist,
+            patch(f"{TELEGRAM_JOBS_MODULE}.crud_notion_block_sync") as mock_sync,
+            patch(f"{TELEGRAM_JOBS_MODULE}.crud_goals") as mock_goals,
+        ):
+            mock_session_factory.return_value.__aenter__.return_value = AsyncMock()
+            mock_sync.update = AsyncMock()
+            mock_goals.get = AsyncMock(return_value=None)
+            ctx = {"redis": AsyncMock()}
+
+            await process_telegram_callback(ctx, str(pending["user_id"]), 42, "cq-1", f"notion_goal:{uuid7()}")
+
+        mock_persist.assert_not_called()
+        mock_sync.update.assert_not_called()
+        ctx["redis"].enqueue_job.assert_called_once_with("send_telegram_message", 42, GOAL_UNAVAILABLE_MESSAGE)
 
     @pytest.mark.asyncio
     async def test_unknown_callback_data_prefix_is_a_no_op(self):
@@ -116,3 +149,36 @@ class TestPendingClarificationRouting:
 
         mock_answer.assert_called_once_with("cq-1")
         mock_session_factory.assert_not_called()
+
+
+class TestResolvePendingClarification:
+    async def _actions(self, mock_db, matched_goal_id, candidate_goals):
+        from src.app.core.telegram.jobs import _resolve_pending_clarification
+        from src.app.schemas.notion_classification import NotionClarificationResolution
+
+        pending = {"id": uuid7(), "user_id": uuid7(), "notion_block_id": "block-1", "notion_page_id": "page-1"}
+        with (
+            patch(f"{TELEGRAM_JOBS_MODULE}.crud_goals") as mock_goals,
+            patch(
+                f"{TELEGRAM_JOBS_MODULE}.resolve_clarification_reply",
+                new=AsyncMock(return_value=NotionClarificationResolution(matched_existing_goal_id=matched_goal_id)),
+            ),
+            patch(f"{TELEGRAM_JOBS_MODULE}.persist_notion_block_outcome", new=AsyncMock()) as mock_persist,
+            patch(f"{TELEGRAM_JOBS_MODULE}.crud_notion_block_sync") as mock_sync,
+        ):
+            mock_goals.get_multi = AsyncMock(return_value={"data": candidate_goals})
+            mock_sync.update = AsyncMock()
+            await _resolve_pending_clarification(mock_db, AsyncMock(), 42, pending, "the redesign one")
+        return mock_persist.call_args.args[5], mock_goals.get_multi.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_goal_it_was_shown_is_linked(self, mock_db):
+        goal_id = uuid7()
+        actions, filters = await self._actions(mock_db, goal_id, [{"id": goal_id, "title": "Redesign"}])
+        assert [(a.kind, a.item_id) for a in actions] == [("link", goal_id)]
+        assert filters["is_deleted"] is False and filters["status"] == "open"
+
+    @pytest.mark.asyncio
+    async def test_goal_id_it_was_not_shown_is_ignored(self, mock_db):
+        actions, _ = await self._actions(mock_db, uuid7(), [{"id": uuid7(), "title": "Redesign"}])
+        assert actions == []

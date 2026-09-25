@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...crud.crud_conversation_messages import crud_conversation_messages
 from ...schemas.conversation_message import ConversationMessageRead
 from ..db.database import local_session
+from ..goals.context import format_goals_for_chat, load_open_goals
 from . import service
 from .provider import LlmMessage
 from .retrieval import search_similar_memories
@@ -25,7 +26,8 @@ CONVERSATION_MESSAGE_RETENTION = timedelta(days=7)
 SYSTEM_PROMPT = (
     "You are MyPA, a helpful personal assistant chatting with the user over a messaging "
     "channel. Reply conversationally and concisely, grounding your answer in the "
-    "conversation history and any remembered context provided below."
+    "conversation history and any remembered context provided below. When the user asks what "
+    "to focus on, weigh their open goals."
 )
 
 
@@ -53,6 +55,19 @@ async def generate_conversation_reply(db: AsyncSession, user_id: uuid_pkg.UUID) 
     if relevant:
         memory_block = "\n".join(f"- {record.summary}" for record in relevant)
         messages.append(LlmMessage(role="system", content=f"Relevant remembered context:\n{memory_block}"))
+
+    # Open goals only (PRD §5.9) — paused/dropped/done/deleted are left out by the loader.
+    open_goals = await load_open_goals(db, user_id)
+    if open_goals:
+        messages.append(
+            LlmMessage(
+                role="system",
+                content=(
+                    "The user's open goals (use them when helping them prioritise):\n"
+                    f"{format_goals_for_chat(open_goals)}"
+                ),
+            )
+        )
     messages += [LlmMessage(role=row["role"], content=row["content"]) for row in recent]
 
     result_completion = await service.llm_service.complete(tier="medium", messages=messages)

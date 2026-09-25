@@ -25,9 +25,9 @@ from ...schemas.memory_extraction_record import MemoryExtractionRecordCreate, Me
 from ...schemas.notion_block_link import NotionBlockLinkCreate
 from ...schemas.task import TaskCreateInternal
 from ..config import settings
+from ..items.sticky import GOAL_STICKY_FLAGS, TASK_STICKY_FLAGS, drop_sticky_fields
 from ..llm.embedding_model import embed_text
 from ..logger import logging
-from ..tasks.sticky import drop_sticky_fields
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,8 @@ class NotionPersistenceAction(BaseModel):
     effort_level: Literal["deep_focus", "light_focus", "passive"] | None = None
     horizon: Literal["short_term", "long_term"] | None = None
     confidence: float | None = None  # required for create — gates against CONFIDENCE_THRESHOLD
+    # Task create only: the accepted AI link (core/goals/context.py::resolve_goal_link).
+    goal_id: uuid_pkg.UUID | None = None
 
 
 async def persist_notion_block_outcome(
@@ -123,6 +125,7 @@ async def _create_item(
                 effort_level=action.effort_level,
                 source="notion",
                 memory_record_id=memory_record_id,
+                goal_id=action.goal_id,
             ),
             commit=False,
         )
@@ -133,7 +136,9 @@ async def _create_item(
                 user_id=user_id,
                 title=action.title,
                 description=action.description,
-                due_date=action.due_date,
+                # The Notion LLM schema has one date field; for a goal it's the target date
+                # (goals have no due_date since 1.9).
+                target_date=action.due_date,
                 horizon=action.horizon,
                 source="notion",
                 memory_record_id=memory_record_id,
@@ -152,8 +157,9 @@ async def _create_item(
 
 async def _update_item(db: AsyncSession, action: NotionPersistenceAction) -> None:
     """Updates the existing Task/Goal in place — no new memory record, no new link row
-    (the link already exists and is untouched). For a task: a deleted (or missing) task is
-    a no-op, and any field the user set by hand (sticky flag) is left alone."""
+    (the link already exists and is untouched). A deleted (or missing) task/goal is a
+    no-op, and any field the user set by hand (sticky flag) is left alone. Never touches a
+    task's `goal_id` — the AI links only when it creates a task."""
     assert action.item_id is not None, "item_id is required for an 'update' action"
     update_fields: dict[str, Any] = {
         key: value
@@ -169,19 +175,24 @@ async def _update_item(db: AsyncSession, action: NotionPersistenceAction) -> Non
         return
 
     if action.item_type == "task":
-        # Read without an is_deleted filter so a deleted task is seen (and skipped) rather
-        # than hitting update()'s NoResultFound and rolling back the whole block.
-        task = await crud_tasks.get(db=db, id=action.item_id)
-        if not task or task["is_deleted"]:
-            return
-        task_fields = drop_sticky_fields(task, update_fields)
-        if task_fields:
-            await crud_tasks.update(db=db, object=task_fields, id=action.item_id, commit=False)
+        crud: Any = crud_tasks
+        sticky_flags = TASK_STICKY_FLAGS
     else:
+        crud = crud_goals
+        sticky_flags = GOAL_STICKY_FLAGS
         # Goal has no urgency/effort_level columns — only title/description apply.
-        goal_fields = {k: v for k, v in update_fields.items() if k in ("title", "description")}
-        if goal_fields:
-            await crud_goals.update(db=db, object=goal_fields, id=action.item_id, commit=False)
+        update_fields = {k: v for k, v in update_fields.items() if k in ("title", "description")}
+        if not update_fields:
+            return
+
+    # Read without an is_deleted filter so a deleted item is seen (and skipped) rather than
+    # hitting update()'s NoResultFound and rolling back the whole block.
+    item = await crud.get(db=db, id=action.item_id)
+    if not item or item["is_deleted"]:
+        return
+    fields = drop_sticky_fields(item, update_fields, sticky_flags)
+    if fields:
+        await crud.update(db=db, object=fields, id=action.item_id, commit=False)
 
 
 async def _link_existing_item(

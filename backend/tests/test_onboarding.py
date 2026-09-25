@@ -69,6 +69,10 @@ class TestSubmitOnboardingGoals:
         with (
             patch(f"{ROUTE_MODULE}.crud_goals") as mock_goals_crud,
             patch(f"{ROUTE_MODULE}.crud_users") as mock_users_crud,
+            patch(
+                f"{ROUTE_MODULE}.resolve_checked_suggestions",
+                new=AsyncMock(side_effect=lambda db, user_id, suggestions: suggestions),
+            ),
         ):
             mock_goals_crud.create = AsyncMock(side_effect=[{"id": uuid7()}, {"id": uuid7()}])
             mock_users_crud.update = AsyncMock()
@@ -99,6 +103,7 @@ class TestSubmitOnboardingGoals:
         with (
             patch(f"{ROUTE_MODULE}.crud_goals") as mock_goals_crud,
             patch(f"{ROUTE_MODULE}.crud_users") as mock_users_crud,
+            patch(f"{ROUTE_MODULE}.resolve_checked_suggestions", new=AsyncMock(return_value=[])),
         ):
             mock_goals_crud.create = AsyncMock()
             mock_users_crud.update = AsyncMock()
@@ -109,4 +114,29 @@ class TestSubmitOnboardingGoals:
         mock_goals_crud.create.assert_not_called()
         mock_users_crud.update.assert_called_once()
         assert mock_users_crud.update.call_args.kwargs["object"]["onboarding_status"] == "completed"
+        mock_db.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_checked_suggestion_the_user_already_has_is_not_created(self, mock_db, current_user_dict):
+        """Required proof (e), submit half: a checked suggestion matching an existing goal
+        is skipped; a typed goal with the same title is still created (not deduped)."""
+        current_user_dict["onboarding_status"] = "ready"
+        duplicate = SuggestedGoal(title="Close the seed round")
+        payload = OnboardingGoalsSubmitRequest(
+            checked_suggestions=[duplicate], additional_goals=[SuggestedGoal(title="Close the seed round")]
+        )
+
+        with (
+            patch(f"{ROUTE_MODULE}.crud_goals") as mock_goals_crud,
+            patch(f"{ROUTE_MODULE}.crud_users") as mock_users_crud,
+            patch(f"{ROUTE_MODULE}.resolve_checked_suggestions", new=AsyncMock(return_value=[])) as mock_resolve,
+        ):
+            mock_goals_crud.create = AsyncMock(return_value={"id": uuid7()})
+            mock_users_crud.update = AsyncMock()
+
+            created = await submit_onboarding_goals(payload=payload, current_user=current_user_dict, db=mock_db)
+
+        assert mock_resolve.call_args.args[1:] == (current_user_dict["id"], [duplicate])
+        assert len(created) == 1
+        assert mock_goals_crud.create.call_args.kwargs["object"].source == "manual"
         mock_db.commit.assert_called_once()

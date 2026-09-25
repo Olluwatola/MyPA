@@ -100,6 +100,7 @@ async def process_telegram_message(ctx: dict[str, Any], user_id: str, chat_id: i
 
 
 CLARIFICATION_CONFIRMATION_MESSAGE = "Got it — linked."
+GOAL_UNAVAILABLE_MESSAGE = "That goal is no longer available — reply with the goal's name instead."
 
 
 async def _resolve_pending_clarification(
@@ -109,6 +110,7 @@ async def _resolve_pending_clarification(
         db=db,
         user_id=pending["user_id"],
         status="open",
+        is_deleted=False,
         limit=settings.NOTION_CLARIFICATION_CANDIDATE_GOAL_LIMIT,
     )
     candidate_goals = [{"id": str(g["id"]), "title": g["title"]} for g in candidate_goals_result["data"]]
@@ -117,11 +119,15 @@ async def _resolve_pending_clarification(
         reply_text, candidate_goals, block_summary=pending["notion_block_id"]
     )
 
+    # Only accept a goal id the LLM was actually shown — anything else is treated as "no match".
+    shown_goal_ids = {goal["id"] for goal in candidate_goals}
+    matched_goal_id = resolution.matched_existing_goal_id
+    if matched_goal_id is not None and str(matched_goal_id) not in shown_goal_ids:
+        matched_goal_id = None
+
     actions: list[NotionPersistenceAction] = []
-    if resolution.matched_existing_goal_id is not None:
-        actions.append(
-            NotionPersistenceAction(kind="link", item_type="goal", item_id=resolution.matched_existing_goal_id)
-        )
+    if matched_goal_id is not None:
+        actions.append(NotionPersistenceAction(kind="link", item_type="goal", item_id=matched_goal_id))
     elif resolution.new_item is not None:
         actions.append(
             NotionPersistenceAction(
@@ -165,6 +171,14 @@ async def process_telegram_callback(
     async with local_session() as db:
         pending = await get_oldest_pending_clarification(db, user_uuid)
         if not pending:
+            return
+
+        # The callback data comes back from the client — only link the user's own goal, and
+        # only if it wasn't deleted since the question was sent. Otherwise the question
+        # stays pending.
+        goal = await crud_goals.get(db=db, id=goal_id, user_id=user_uuid, is_deleted=False)
+        if not goal:
+            await ctx["redis"].enqueue_job("send_telegram_message", chat_id, GOAL_UNAVAILABLE_MESSAGE)
             return
 
         actions = [NotionPersistenceAction(kind="link", item_type="goal", item_id=goal_id)]

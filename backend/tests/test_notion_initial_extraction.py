@@ -34,6 +34,13 @@ def _item(source_block_id: str, title: str, confidence: float = 0.9) -> NotionCh
     )
 
 
+@pytest.fixture(autouse=True)
+def no_open_goals():
+    """Most tests don't care about goal linking — the user has no open goals."""
+    with patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=[])) as mock_load:
+        yield mock_load
+
+
 class TestChunkedParallelExtraction:
     @pytest.mark.asyncio
     async def test_large_page_is_chunked_and_extracted_in_parallel(self, mock_db):
@@ -116,3 +123,41 @@ class TestChunkedParallelExtraction:
         mock_extract.assert_not_called()
         mock_persist.assert_not_called()
         mock_records.create.assert_called_once()  # the one flag record, nothing else
+
+
+class TestInitialExtractionGoalLink:
+    """A confident task from a new page is linked to an open goal; open goals are loaded
+    once per page and passed to every chunk call."""
+
+    @pytest.mark.asyncio
+    async def test_open_goals_passed_to_chunks_and_confident_link_kept(self, mock_db):
+        goal_id = uuid7()
+        open_goals = [{"id": goal_id, "title": "Launch ClientPal", "description": None, "horizon": None}]
+        blocks = [_block("b1", "draft the landing page")]
+        linked = NotionChunkExtractedItem(
+            item_type="task",
+            title="Draft landing page",
+            confidence=0.9,
+            source_block_id="b1",
+            goal_ref=1,
+            goal_link_confidence=0.9,
+        )
+
+        with (
+            patch(f"{MODULE}.load_open_goals", new=AsyncMock(return_value=open_goals)) as mock_load,
+            patch(f"{MODULE}.fetch_all_blocks_recursive", new=AsyncMock(return_value=blocks)),
+            patch(f"{MODULE}.chunk_blocks", return_value=[blocks]),
+            patch(
+                f"{MODULE}.extract_chunk", new=AsyncMock(return_value=NotionChunkExtractionResult(items=[linked]))
+            ) as mock_extract,
+            patch(f"{MODULE}.embed_text", new=AsyncMock(return_value=[1.0, 0.0])),
+            patch(f"{MODULE}.persist_notion_block_outcome", new=AsyncMock()) as mock_persist,
+            patch(f"{MODULE}.crud_notion_block_sync") as mock_sync,
+        ):
+            mock_sync.get = AsyncMock(return_value=None)
+            mock_sync.create = AsyncMock(return_value={"id": uuid7()})
+            await run_initial_extraction(mock_db, uuid7(), "token", "page-1")
+
+        mock_load.assert_awaited_once()
+        assert mock_extract.call_args.args[2] == open_goals
+        assert mock_persist.call_args.args[5][0].goal_id == goal_id

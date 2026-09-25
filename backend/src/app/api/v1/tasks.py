@@ -5,7 +5,10 @@ still treats that line as "already handled" (see decisions-log.md, 2026-09-24).
 
 `status` changes only through `PATCH /tasks/{id}/status` — the one place that enqueues
 `sync_status_to_notion`. `PATCH /tasks/{id}` edits content fields and marks each edited
-field as a sticky manual override (core/tasks/sticky.py).
+field as a sticky manual override (core/items/sticky.py).
+
+`goal_id` (Feature 1.9) links a task to one of the user's own non-deleted goals, of any
+status. A link the user sets or clears is sticky — the AI never changes it.
 """
 
 import uuid as uuid_pkg
@@ -19,8 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.db.database import async_get_db
 from ...core.exceptions.http_exceptions import BadRequestException, ForbiddenException, NotFoundException
-from ...core.tasks.sticky import manual_edit_flags
+from ...core.items.sticky import TASK_STICKY_FLAGS, manual_edit_flags
 from ...core.utils import queue
+from ...crud.crud_goals import crud_goals
 from ...crud.crud_tasks import crud_tasks
 from ...schemas.task import (
     TaskCreate,
@@ -52,12 +56,23 @@ async def _get_owned_task(db: AsyncSession, task_id: uuid_pkg.UUID, current_user
     return task
 
 
+async def _check_linkable_goal(db: AsyncSession, goal_id: uuid_pkg.UUID, current_user: dict) -> None:
+    """The same error whether the goal is missing, deleted, or another user's — never
+    reveals whether someone else's goal exists."""
+    goal = await crud_goals.get(db=db, id=goal_id, user_id=current_user["id"], is_deleted=False)
+    if not goal:
+        raise BadRequestException("goal_id does not match any of your goals.")
+
+
 @router.post("", response_model=TaskRead, status_code=201)
 async def write_task(
     body: TaskCreate,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict:
+    if body.goal_id is not None:
+        await _check_linkable_goal(db, body.goal_id, current_user)
+
     fields_to_guess = [field for field in ("urgency", "effort_level") if getattr(body, field) is None]
 
     created = await crud_tasks.create(
@@ -74,6 +89,8 @@ async def write_task(
             # left for the background AI guess.
             urgency_manually_set=body.urgency is not None,
             effort_level_manually_set=body.effort_level is not None,
+            goal_id=body.goal_id,
+            goal_id_manually_set=body.goal_id is not None,
         ),
         schema_to_select=TaskRead,
     )
@@ -95,6 +112,7 @@ async def read_tasks(
     source: TaskSource | None = None,
     due_from: date | None = None,
     due_to: date | None = None,
+    goal_id: uuid_pkg.UUID | None = None,
 ) -> dict:
     if due_from and due_to and due_from > due_to:
         raise BadRequestException("due_from must be on or before due_to.")
@@ -110,6 +128,10 @@ async def read_tasks(
         filters["due_date__gte"] = due_from
     if due_to:
         filters["due_date__lte"] = due_to
+    if goal_id:
+        # No ownership check needed: the user_id filter already limits this to the
+        # caller's own tasks.
+        filters["goal_id"] = goal_id
 
     # Default order: open first, then soonest due date (no date last), then newest, with
     # `id` as a stable tie-breaker. FastCRUD only sorts by plain columns, so this relies on
@@ -149,7 +171,11 @@ async def patch_task(
     if not changes:
         return task
 
-    changes |= manual_edit_flags(changes)
+    if changes.get("goal_id") is not None:
+        await _check_linkable_goal(db, changes["goal_id"], current_user)
+
+    # A goal_id edit (including `null` = unlink) sets goal_id_manually_set here too.
+    changes |= manual_edit_flags(changes, TASK_STICKY_FLAGS)
     # return_as_model=True is what makes update() return the row at all — with only
     # schema_to_select it returns None, which fails response validation (a 500).
     updated = await crud_tasks.update(

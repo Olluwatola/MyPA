@@ -32,6 +32,8 @@ class Task(TimestampSchema, TaskBase, UUIDSchema, PersistentDeletion):
     effort_level_manually_set: bool = False
     title_manually_set: bool = False
     description_manually_set: bool = False
+    goal_id: uuid_pkg.UUID | None = None
+    goal_id_manually_set: bool = False
 
 
 class TaskRead(BaseModel):
@@ -45,6 +47,7 @@ class TaskRead(BaseModel):
     effort_level: EffortLevel | None = None
     memory_record_id: uuid_pkg.UUID | None = None
     scheduled_event_id: str | None = None
+    goal_id: uuid_pkg.UUID | None = None
     created_at: datetime
 
 
@@ -52,7 +55,8 @@ class TaskCreate(BaseModel):
     """Public input for `POST /tasks`. Deliberately does not inherit `TaskBase`: `None`
     for `urgency`/`effort_level` means "left empty — let the AI guess in the background",
     which `TaskBase`'s `"medium"` default can't express. `source` is server-set
-    (`"manual"`), never client-supplied."""
+    (`"manual"`), never client-supplied. `goal_id` must be one of the user's own
+    non-deleted goals."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +65,7 @@ class TaskCreate(BaseModel):
     due_date: date | None = None
     urgency: Urgency | None = None
     effort_level: EffortLevel | None = None
+    goal_id: uuid_pkg.UUID | None = None
 
 
 class TaskCreateInternal(TaskBase):
@@ -69,13 +74,15 @@ class TaskCreateInternal(TaskBase):
     memory_record_id: uuid_pkg.UUID | None = None
     urgency_manually_set: bool = False
     effort_level_manually_set: bool = False
+    goal_id: uuid_pkg.UUID | None = None
+    goal_id_manually_set: bool = False
 
 
 class TaskUpdate(BaseModel):
     """Public input for `PATCH /tasks/{id}`. `status` is deliberately absent — it changes
     only through `PATCH /tasks/{id}/status`, the one place that enqueues Notion sync.
-    An explicit `null` clears `description`/`due_date`/`effort_level`, but is rejected for
-    the non-nullable `title`/`urgency`."""
+    An explicit `null` clears `description`/`due_date`/`effort_level` and unlinks
+    `goal_id`, but is rejected for the non-nullable `title`/`urgency`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -84,6 +91,7 @@ class TaskUpdate(BaseModel):
     due_date: date | None = None
     urgency: Urgency | None = None
     effort_level: EffortLevel | None = None
+    goal_id: uuid_pkg.UUID | None = None
 
     @model_validator(mode="after")
     def reject_null_for_required_fields(self) -> "TaskUpdate":
@@ -96,12 +104,13 @@ class TaskUpdate(BaseModel):
 class TaskUpdateInternal(TaskUpdate):
     updated_at: datetime
     # Sticky-override flags, set alongside a user edit of the matching field (see
-    # core/tasks/sticky.py). Never instantiated — internal `.update()` calls pass a plain
+    # core/items/sticky.py). Never instantiated — internal `.update()` calls pass a plain
     # dict (decisions-log.md, 2026-09-09).
     urgency_manually_set: bool | None = None
     effort_level_manually_set: bool | None = None
     title_manually_set: bool | None = None
     description_manually_set: bool | None = None
+    goal_id_manually_set: bool | None = None
 
 
 class TaskDelete(BaseModel):

@@ -17,6 +17,7 @@ from ...models.integration_connection import IntegrationConnection
 from ..config import settings
 from ..crypto import encrypt_token
 from ..db.database import local_session
+from ..goals.onboarding import drop_existing_goal_suggestions
 from ..llm.extraction import run_memory_extraction_pipeline
 from ..llm.onboarding_synthesis import call_goal_synthesis_llm
 from ..logger import logging
@@ -370,7 +371,10 @@ async def run_onboarding_ingestion(ctx: dict[str, Any], user_id: str) -> None:
             suggested_goals: list[dict[str, Any]] = []
             if summaries:
                 result = await call_goal_synthesis_llm(summaries)
-                suggested_goals = [g.model_dump(mode="json") for g in result.suggested_goals]
+                # Confident email goals were already auto-created above (through the
+                # extraction pipeline) — never suggest a goal the user already has.
+                kept = await drop_existing_goal_suggestions(db, user_uuid, result.suggested_goals)
+                suggested_goals = [g.model_dump(mode="json") for g in kept]
 
             await crud_users.update(
                 db=db,

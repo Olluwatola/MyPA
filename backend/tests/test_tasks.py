@@ -394,3 +394,105 @@ class TestPatchTaskStatus:
         assert result["status"] == "done"
         assert mock_crud.update.call_args.kwargs["return_as_model"] is True
         mock_queue.pool.enqueue_job.assert_called_once_with("sync_status_to_notion", "task", str(task_id))
+
+
+class TestTaskGoalLink:
+    """Feature 1.9: the optional task -> goal link. The user may link a task to any of their
+    own non-deleted goals; a link the user sets or clears is sticky (the AI never changes it)."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_own_goal_is_a_sticky_link(self, mock_db, current_user_dict):
+        goal_id = uuid7()
+        with (
+            patch(f"{MODULE}.crud_tasks") as mock_crud,
+            patch(f"{MODULE}.crud_goals") as mock_goals,
+            patch(f"{MODULE}.queue") as mock_queue,
+        ):
+            mock_goals.get = AsyncMock(return_value={"id": goal_id})
+            mock_crud.create = AsyncMock(return_value={"id": uuid7()})
+            mock_queue.pool.enqueue_job = AsyncMock()
+            await write_task(
+                body=TaskCreate(title="Draft landing page", goal_id=goal_id), current_user=current_user_dict, db=mock_db
+            )
+
+        goal_filters = mock_goals.get.call_args.kwargs
+        assert goal_filters["id"] == goal_id
+        assert goal_filters["user_id"] == current_user_dict["id"] and goal_filters["is_deleted"] is False
+        created = mock_crud.create.call_args.kwargs["object"]
+        assert created.goal_id == goal_id and created.goal_id_manually_set is True
+
+    @pytest.mark.asyncio
+    async def test_create_without_goal_is_not_sticky_and_skips_the_check(self, mock_db, current_user_dict):
+        with (
+            patch(f"{MODULE}.crud_tasks") as mock_crud,
+            patch(f"{MODULE}.crud_goals") as mock_goals,
+            patch(f"{MODULE}.queue") as mock_queue,
+        ):
+            mock_goals.get = AsyncMock()
+            mock_crud.create = AsyncMock(return_value={"id": uuid7()})
+            mock_queue.pool.enqueue_job = AsyncMock()
+            await write_task(body=TaskCreate(title="Draft landing page"), current_user=current_user_dict, db=mock_db)
+
+        mock_goals.get.assert_not_called()
+        created = mock_crud.create.call_args.kwargs["object"]
+        assert created.goal_id is None and created.goal_id_manually_set is False
+
+    @pytest.mark.asyncio
+    async def test_missing_deleted_or_foreign_goal_is_rejected_on_create(self, mock_db, current_user_dict):
+        """One lookup covers all three (filtered by user_id + is_deleted), and gives one
+        message — never revealing whether someone else's goal exists."""
+        with patch(f"{MODULE}.crud_tasks") as mock_crud, patch(f"{MODULE}.crud_goals") as mock_goals:
+            mock_goals.get = AsyncMock(return_value=None)
+            mock_crud.create = AsyncMock()
+            with pytest.raises(BadRequestException, match="goal_id does not match any of your goals"):
+                await write_task(
+                    body=TaskCreate(title="x", goal_id=uuid7()), current_user=current_user_dict, db=mock_db
+                )
+        mock_crud.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_filters_by_goal(self, mock_db, current_user_dict):
+        goal_id = uuid7()
+        with patch(f"{MODULE}.crud_tasks") as mock_crud:
+            mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
+            await read_tasks(current_user=current_user_dict, db=mock_db, page=1, items_per_page=20, goal_id=goal_id)
+        kwargs = mock_crud.get_multi.call_args.kwargs
+        assert kwargs["goal_id"] == goal_id and kwargs["user_id"] == current_user_dict["id"]
+
+    @pytest.mark.asyncio
+    async def test_patch_link_is_checked_and_sticky(self, mock_db, current_user_dict):
+        task, goal_id = _owned_task(current_user_dict), uuid7()
+        with patch(f"{MODULE}.crud_tasks") as mock_crud, patch(f"{MODULE}.crud_goals") as mock_goals:
+            mock_crud.get = AsyncMock(return_value=task)
+            mock_crud.update = AsyncMock(return_value=task)
+            mock_goals.get = AsyncMock(return_value={"id": goal_id})
+            await patch_task(
+                task_id=task["id"], body=TaskUpdate(goal_id=goal_id), current_user=current_user_dict, db=mock_db
+            )
+        assert mock_crud.update.call_args.kwargs["object"] == {"goal_id": goal_id, "goal_id_manually_set": True}
+
+    @pytest.mark.asyncio
+    async def test_patch_unlink_is_sticky_and_skips_the_check(self, mock_db, current_user_dict):
+        task = _owned_task(current_user_dict)
+        with patch(f"{MODULE}.crud_tasks") as mock_crud, patch(f"{MODULE}.crud_goals") as mock_goals:
+            mock_crud.get = AsyncMock(return_value=task)
+            mock_crud.update = AsyncMock(return_value=task)
+            mock_goals.get = AsyncMock()
+            await patch_task(
+                task_id=task["id"], body=TaskUpdate(goal_id=None), current_user=current_user_dict, db=mock_db
+            )
+        mock_goals.get.assert_not_called()
+        assert mock_crud.update.call_args.kwargs["object"] == {"goal_id": None, "goal_id_manually_set": True}
+
+    @pytest.mark.asyncio
+    async def test_patch_to_other_users_goal_rejected(self, mock_db, current_user_dict):
+        task = _owned_task(current_user_dict)
+        with patch(f"{MODULE}.crud_tasks") as mock_crud, patch(f"{MODULE}.crud_goals") as mock_goals:
+            mock_crud.get = AsyncMock(return_value=task)
+            mock_crud.update = AsyncMock()
+            mock_goals.get = AsyncMock(return_value=None)
+            with pytest.raises(BadRequestException):
+                await patch_task(
+                    task_id=task["id"], body=TaskUpdate(goal_id=uuid7()), current_user=current_user_dict, db=mock_db
+                )
+        mock_crud.update.assert_not_called()

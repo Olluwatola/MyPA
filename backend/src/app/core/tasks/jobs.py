@@ -13,9 +13,9 @@ from sqlalchemy.exc import NoResultFound
 from ...crud.crud_tasks import crud_tasks
 from ..db.database import local_session
 from ..integrations.jobs import _retry_delay_seconds
+from ..items.sticky import TASK_STICKY_FLAGS
 from ..llm.task_field_guess import call_task_field_guess_llm
 from ..logger import logging
-from .sticky import STICKY_FLAG_BY_FIELD
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ async def guess_task_fields(ctx: dict[str, Any], task_id: str, fields: list[str]
         if not task:
             return  # deleted meanwhile
 
-        still_needed = [field for field in fields if not task[STICKY_FLAG_BY_FIELD[field]]]
+        still_needed = [field for field in fields if not task[TASK_STICKY_FLAGS[field]]]
         if not still_needed:
             return  # the user already set every requested field by hand
 
@@ -48,7 +48,7 @@ async def guess_task_fields(ctx: dict[str, Any], task_id: str, fields: list[str]
             # The sticky flag is part of the WHERE clause, so a user edit that landed while
             # the LLM was thinking can't be overwritten — no read-then-write gap. The guess
             # itself never sets the flag.
-            flag_still_unset: dict[str, Any] = {STICKY_FLAG_BY_FIELD[field]: False}
+            flag_still_unset: dict[str, Any] = {TASK_STICKY_FLAGS[field]: False}
             try:
                 await crud_tasks.update(
                     db=db, object={field: value}, id=task["id"], is_deleted=False, **flag_still_unset

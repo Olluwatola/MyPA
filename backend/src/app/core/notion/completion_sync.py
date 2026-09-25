@@ -4,6 +4,18 @@ Notion's checkbox is block-level: a block can resolve to multiple items, but it 
 one checkbox (see PRD §6.5) — checked only once EVERY linked item is done, and checking
 it directly in Notion marks ALL currently-linked items done. Every write here only fires
 when the two sides actually disagree, per the PRD's "no redundant write-back loop" rule.
+
+Goal statuses go beyond done / not done (decisions-log.md 2026-09-24):
+
+| Direction | Rule |
+|---|---|
+| App -> Notion | A dropped goal is ignored, like a deleted item. A paused goal counts as not done. |
+| Notion ticked | Every live item not yet done becomes done — a paused goal included. Dropped is left alone. |
+| Notion unticked | Only items that are `done` go back to `open`. Paused and dropped stay as they are. |
+
+The unticked rule matters because `edit_gate.process_changed_block` runs
+`sync_checkbox_from_notion` on every processed `to_do` block, even a text-only edit — a
+"match the box" rule would flip a paused goal back to open on a typo fix.
 """
 
 import uuid as uuid_pkg
@@ -25,20 +37,26 @@ async def _linked_items(db: AsyncSession, user_id: uuid_pkg.UUID, notion_block_i
     return list(result["data"])
 
 
+def _is_live(item: dict[str, Any]) -> bool:
+    """Deleted tasks/goals (their link rows are kept) and dropped goals take no part in
+    completion sync in either direction."""
+    return not item["is_deleted"] and item["status"] != "dropped"
+
+
 async def determine_desired_checked_state(
     db: AsyncSession, user_id: uuid_pkg.UUID, notion_block_id: str
 ) -> bool | None:
-    """Soft-deleted tasks (their link rows are kept) are ignored — otherwise one deleted
-    task would stop the block's checkbox from ever being checked again. `None` means the
-    block has no live linked items, so there is nothing to decide and Notion must not be
-    touched (deleting a task never changes Notion)."""
+    """Non-live items are ignored — otherwise one deleted task would stop the block's
+    checkbox from ever being checked again. `None` means the block has no live linked
+    items, so there is nothing to decide and Notion must not be touched (deleting a task or
+    goal never changes Notion)."""
     links = await _linked_items(db, user_id, notion_block_id)
 
     live_items = []
     for link in links:
         crud = crud_tasks if link["item_type"] == "task" else crud_goals
         item = await crud.get(db=db, id=link["item_id"])
-        if item and not item.get("is_deleted"):  # goal rows have no is_deleted key
+        if item and _is_live(item):
             live_items.append(item)
 
     if not live_items:
@@ -49,17 +67,19 @@ async def determine_desired_checked_state(
 async def sync_checkbox_from_notion(
     db: AsyncSession, user_id: uuid_pkg.UUID, notion_block_id: str, checked: bool
 ) -> None:
-    """Notion -> App. All-or-nothing: every linked item for this block gets its
-    status set to match `checked`. Check-before-write per item (skips any item already in
-    the desired status). A soft-deleted task is never revived or updated."""
-    desired_status: Literal["open", "done"] = "done" if checked else "open"
-
+    """Notion -> App. All-or-nothing across the block's live items: ticked marks every one
+    done; unticked reopens only the ones that are done (see the module docstring's table).
+    Check-before-write per item. A deleted item or dropped goal is never updated."""
     items = await _linked_items(db, user_id, notion_block_id)
     for link in items:
         crud = crud_tasks if link["item_type"] == "task" else crud_goals
         item = await crud.get(db=db, id=link["item_id"])
-        if item and not item.get("is_deleted") and item["status"] != desired_status:
-            await crud.update(db=db, object={"status": desired_status}, id=link["item_id"])
+        if not item or not _is_live(item):
+            continue
+        if checked and item["status"] != "done":
+            await crud.update(db=db, object={"status": "done"}, id=link["item_id"])
+        elif not checked and item["status"] == "done":
+            await crud.update(db=db, object={"status": "open"}, id=link["item_id"])
 
 
 async def sync_status_to_notion(ctx: dict[str, Any], item_type: Literal["task", "goal"], item_id: str) -> None:
