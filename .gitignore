@@ -63,3 +63,4 @@ venv/
 # --- Local-only docs (not tracked in this repo) ---
 /dumpbox/
 /project-manager/
+.gstack/

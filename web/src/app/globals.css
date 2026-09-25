@@ -1,0 +1,185 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * Design tokens — values come from project-manager/design-system.md (§3 color, §4 type, §5 shape,
+ * §6 motion). This file is the source of truth for values; the design doc explains why.
+ * Light theme only (dark mode parked, P-06). Components use tokens, never raw values.
+ */
+
+:root {
+  /* §3.1 Neutrals */
+  --canvas: oklch(0.985 0.004 85);
+  --surface: oklch(1 0 0);
+  --sunken: oklch(0.965 0.006 85);
+  --muted: oklch(0.945 0.007 85);
+  --border: oklch(0.905 0.008 85);
+  --border-strong: oklch(0.84 0.01 85);
+  --ink: oklch(0.235 0.012 75);
+  --ink-2: oklch(0.44 0.012 75);
+  --ink-3: oklch(0.53 0.01 75);
+
+  /* §3.2 Accent — assistant teal */
+  --accent: oklch(0.47 0.075 195);
+  --accent-hover: oklch(0.42 0.068 195);
+  --accent-ink: oklch(0.36 0.058 195);
+  --accent-soft: oklch(0.955 0.022 195);
+  --on-accent: oklch(1 0 0);
+
+  /* §3.3 Status */
+  --danger: oklch(0.52 0.17 27);
+  --danger-soft: oklch(0.96 0.018 27);
+  --warning: oklch(0.5 0.1 65);
+  --warning-soft: oklch(0.96 0.035 80);
+  --success: oklch(0.49 0.1 150);
+  --success-soft: oklch(0.96 0.03 150);
+
+  /* §3.5 Overlays */
+  --border-alpha: oklch(0.235 0.012 75 / 0.1);
+  --backdrop: oklch(0.235 0.012 75 / 0.32);
+
+  /* §6.1 Motion durations (easings live in @theme so they become utilities) */
+  --dur-press: 140ms;
+  --dur-small: 200ms;
+  --dur-overlay: 240ms;
+  --dur-drawer: 320ms;
+
+  /* Layout */
+  --tab-bar-height: 56px;
+
+  /* shadcn variables, mapped onto the tokens above (design-system.md §10) */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: var(--on-accent);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--ink);
+  --muted-foreground: var(--ink-2);
+  --destructive: var(--danger);
+  --input: var(--border-strong);
+  --ring: var(--accent);
+  --radius: 14px;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-border-alpha: var(--border-alpha);
+  --color-backdrop: var(--backdrop);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* §4.1 Families (set by next/font in layout.tsx) */
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-newsreader), ui-serif, Georgia, serif;
+
+  /* §4.2 Scale */
+  --text-display: 1.75rem;
+  --text-display--line-height: 1.2;
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.3;
+  --text-heading: 1.0625rem;
+  --text-heading--line-height: 1.4;
+  --text-body: 1rem;
+  --text-body--line-height: 1.55;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.45;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.35;
+
+  /* §5 Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* §5 Elevation */
+  --shadow-1: 0 1px 2px oklch(0.235 0.012 75 / 0.06), 0 1px 1px oklch(0.235 0.012 75 / 0.04);
+  --shadow-2: 0 4px 12px oklch(0.235 0.012 75 / 0.08), 0 1px 3px oklch(0.235 0.012 75 / 0.06);
+  --shadow-3: 0 16px 40px oklch(0.235 0.012 75 / 0.12), 0 2px 6px oklch(0.235 0.012 75 / 0.06);
+
+  /* §6.1 Easing */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* §6.2 Skeletons: gentle 1.6s opacity pulse, no shimmer */
+  --animate-pulse: pulse 1.6s ease-in-out infinite;
+}
+
+/* Keeps page content clear of the fixed mobile tab bar (plan §7). */
+@utility pb-tab-bar {
+  padding-bottom: calc(var(--tab-bar-height) + env(safe-area-inset-bottom));
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-body text-ink;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  a {
+    text-underline-offset: 0.2em;
+  }
+
+  /* §9: visible focus everywhere */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}

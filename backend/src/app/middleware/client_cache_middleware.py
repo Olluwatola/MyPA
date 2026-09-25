@@ -24,8 +24,8 @@ class ClientCacheMiddleware(BaseHTTPMiddleware):
 
     Note
     ----
-        - The `Cache-Control` header instructs clients (e.g., browsers)
-        to cache the response for the specified duration.
+        - Responses under `/api/` get `private, no-cache` (per-user data, always revalidated).
+        - Every other response is cached publicly for `max_age` seconds.
     """
 
     def __init__(self, app: FastAPI, max_age: int = 60) -> None:
@@ -52,5 +52,10 @@ class ClientCacheMiddleware(BaseHTTPMiddleware):
             - This method is automatically called by Starlette for processing the request-response cycle.
         """
         response: Response = await call_next(request)
-        response.headers["Cache-Control"] = f"public, max-age={self.max_age}"
+        if request.url.path.startswith("/api/"):
+            # API responses are per-user: never let shared caches store them, and make the browser
+            # revalidate every time so it can't serve stale or another user's data.
+            response.headers["Cache-Control"] = "private, no-cache"
+        else:
+            response.headers["Cache-Control"] = f"public, max-age={self.max_age}"
         return response
