@@ -12,7 +12,7 @@ title/description as a sticky manual override (core/items/sticky.py).
 import uuid as uuid_pkg
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastcrud import PaginatedListResponse, compute_offset, paginated_response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import update
@@ -22,6 +22,7 @@ from ...core.db.database import async_get_db
 from ...core.exceptions.http_exceptions import ForbiddenException, NotFoundException
 from ...core.items.sticky import GOAL_STICKY_FLAGS, manual_edit_flags
 from ...core.utils import queue
+from ...core.utils.etag import etag_for, not_modified_or_none
 from ...crud.crud_goals import crud_goals
 from ...models.task import Task
 from ...schemas.goal import (
@@ -54,6 +55,16 @@ async def _get_owned_goal(db: AsyncSession, goal_id: uuid_pkg.UUID, current_user
     return goal
 
 
+def _with_etag(request: Request, response: Response, payload: dict, current_user: dict) -> dict | Response:
+    """The payload with an `ETag` header, or a bodyless `304` if the browser's copy is current."""
+    etag = etag_for(payload, current_user["id"])
+    not_modified = not_modified_or_none(request, etag)
+    if not_modified is not None:
+        return not_modified
+    response.headers["ETag"] = etag
+    return payload
+
+
 @router.post("", response_model=GoalRead, status_code=201)
 async def write_goal(
     body: GoalCreate,
@@ -82,6 +93,8 @@ async def write_goal(
 
 @router.get("", response_model=PaginatedListResponse[GoalRead], status_code=200)
 async def read_goals(
+    request: Request,
+    response: Response,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
     page: Annotated[int, Query(ge=1)] = 1,
@@ -89,10 +102,11 @@ async def read_goals(
     status: Annotated[list[GoalStatus] | None, Query()] = None,
     horizon: GoalHorizon | None = None,
     source: GoalSource | None = None,
-) -> dict:
+) -> dict | Response:
     """`status` takes several values (`?status=open&status=paused` for an "active goals"
     view). Newest first — the tasks list's "open first" trick relies on the alphabetical
-    order of two statuses and doesn't work with four."""
+    order of two statuses and doesn't work with four. Answers `304` when the browser's
+    cached copy is still current (core/utils/etag.py)."""
     filters: dict[str, Any] = {"user_id": current_user["id"], "is_deleted": False}
     if status:
         filters["status__in"] = status
@@ -110,16 +124,20 @@ async def read_goals(
         sort_orders=["desc", "desc"],
         **filters,
     )
-    return paginated_response(crud_data=crud_data, page=page, items_per_page=items_per_page)
+    payload = paginated_response(crud_data=crud_data, page=page, items_per_page=items_per_page)
+    return _with_etag(request, response, payload, current_user)
 
 
 @router.get("/{goal_id}", response_model=GoalRead, status_code=200)
 async def read_goal(
+    request: Request,
+    response: Response,
     goal_id: uuid_pkg.UUID,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
-) -> dict:
-    return await _get_owned_goal(db, goal_id, current_user)
+) -> dict | Response:
+    goal = await _get_owned_goal(db, goal_id, current_user)
+    return _with_etag(request, response, goal, current_user)
 
 
 @router.patch("/{goal_id}", response_model=GoalRead, status_code=200)

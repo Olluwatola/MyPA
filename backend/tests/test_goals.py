@@ -4,10 +4,11 @@ sort/pagination, sticky title/description on manual edit, soft delete (never tou
 Notion, un-linking the goal's tasks), soft-deleted goals returning 404 on every
 single-item route, and the D-06 fix on the status route."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import Request, Response
 from pydantic import ValidationError
 from uuid6 import uuid7
 
@@ -21,7 +22,7 @@ from src.app.api.v1.goals import (
     write_goal,
 )
 from src.app.core.exceptions.http_exceptions import ForbiddenException, NotFoundException
-from src.app.schemas.goal import GoalCreate, GoalUpdate
+from src.app.schemas.goal import GoalCreate, GoalRead, GoalUpdate
 
 MODULE = "src.app.api.v1.goals"
 
@@ -33,6 +34,11 @@ def _owned_goal(current_user_dict: dict, **overrides) -> dict:
         "status": "open",
         "title": "Launch ClientPal",
     } | overrides
+
+
+def _request(if_none_match: str | None = None) -> Request:
+    headers = [(b"if-none-match", if_none_match.encode())] if if_none_match else []
+    return Request({"type": "http", "method": "GET", "path": "/api/v1/goals", "headers": headers})
 
 
 def _assert_lookup_hides_deleted(mock_crud) -> None:
@@ -89,7 +95,14 @@ class TestReadGoals:
     async def test_default_call_filters_deleted_sorts_newest_first_and_paginates(self, mock_db, current_user_dict):
         with patch(f"{MODULE}.crud_goals") as mock_crud:
             mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 45})
-            result = await read_goals(current_user=current_user_dict, db=mock_db, page=2, items_per_page=20)
+            result = await read_goals(
+                request=_request(),
+                response=Response(),
+                current_user=current_user_dict,
+                db=mock_db,
+                page=2,
+                items_per_page=20,
+            )
 
         kwargs = mock_crud.get_multi.call_args.kwargs
         assert kwargs["user_id"] == current_user_dict["id"]
@@ -105,6 +118,8 @@ class TestReadGoals:
         with patch(f"{MODULE}.crud_goals") as mock_crud:
             mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
             await read_goals(
+                request=_request(),
+                response=Response(),
                 current_user=current_user_dict,
                 db=mock_db,
                 status=["open", "paused"],
@@ -117,6 +132,48 @@ class TestReadGoals:
         assert kwargs["horizon"] == "short_term"
         assert kwargs["source"] == "email"
 
+    @pytest.mark.asyncio
+    async def test_sets_etag_then_answers_304_when_unchanged(self, mock_db, current_user_dict):
+        with patch(f"{MODULE}.crud_goals") as mock_crud:
+            mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
+            first = Response()
+            await read_goals(request=_request(), response=first, current_user=current_user_dict, db=mock_db)
+            etag = first.headers["ETag"]
+
+            second = await read_goals(
+                request=_request(if_none_match=etag), response=Response(), current_user=current_user_dict, db=mock_db
+            )
+
+        assert isinstance(second, Response)
+        assert second.status_code == 304
+        assert second.headers["ETag"] == etag
+        assert second.body == b""
+
+
+class TestReadGoalEtag:
+    @pytest.mark.asyncio
+    async def test_changed_goal_gets_a_new_etag_and_a_full_reply(self, mock_db, current_user_dict):
+        goal = _owned_goal(current_user_dict)
+        with patch(f"{MODULE}.crud_goals") as mock_crud:
+            mock_crud.get = AsyncMock(return_value=goal)
+            first = Response()
+            await read_goal(
+                request=_request(), response=first, goal_id=goal["id"], current_user=current_user_dict, db=mock_db
+            )
+
+            mock_crud.get = AsyncMock(return_value=goal | {"title": "Launch ClientPal v2"})
+            second_response = Response()
+            second = await read_goal(
+                request=_request(if_none_match=first.headers["ETag"]),
+                response=second_response,
+                goal_id=goal["id"],
+                current_user=current_user_dict,
+                db=mock_db,
+            )
+
+        assert second == goal | {"title": "Launch ClientPal v2"}
+        assert second_response.headers["ETag"] != first.headers["ETag"]
+
 
 class TestReadGoal:
     @pytest.mark.asyncio
@@ -124,7 +181,16 @@ class TestReadGoal:
         goal = _owned_goal(current_user_dict)
         with patch(f"{MODULE}.crud_goals") as mock_crud:
             mock_crud.get = AsyncMock(return_value=goal)
-            assert await read_goal(goal_id=goal["id"], current_user=current_user_dict, db=mock_db) == goal
+            assert (
+                await read_goal(
+                    request=_request(),
+                    response=Response(),
+                    goal_id=goal["id"],
+                    current_user=current_user_dict,
+                    db=mock_db,
+                )
+                == goal
+            )
         _assert_lookup_hides_deleted(mock_crud)
 
     @pytest.mark.asyncio
@@ -132,7 +198,9 @@ class TestReadGoal:
         with patch(f"{MODULE}.crud_goals") as mock_crud:
             mock_crud.get = AsyncMock(return_value=None)
             with pytest.raises(NotFoundException):
-                await read_goal(goal_id=uuid7(), current_user=current_user_dict, db=mock_db)
+                await read_goal(
+                    request=_request(), response=Response(), goal_id=uuid7(), current_user=current_user_dict, db=mock_db
+                )
         _assert_lookup_hides_deleted(mock_crud)
 
     @pytest.mark.asyncio
@@ -140,7 +208,9 @@ class TestReadGoal:
         with patch(f"{MODULE}.crud_goals") as mock_crud:
             mock_crud.get = AsyncMock(return_value=_owned_goal(current_user_dict, user_id=uuid7()))
             with pytest.raises(ForbiddenException):
-                await read_goal(goal_id=uuid7(), current_user=current_user_dict, db=mock_db)
+                await read_goal(
+                    request=_request(), response=Response(), goal_id=uuid7(), current_user=current_user_dict, db=mock_db
+                )
 
 
 class TestPatchGoal:
@@ -321,3 +391,16 @@ class TestPatchGoalStatus:
     def test_unknown_status_rejected(self):
         with pytest.raises(ValidationError):
             GoalStatusUpdate(status="archived")  # type: ignore[arg-type]
+
+
+class TestGoalRead:
+    def test_carries_the_sticky_flags_for_the_ui_pin(self, current_user_dict):
+        row = _owned_goal(current_user_dict, source="manual", created_at=datetime.now(UTC)) | {
+            "title_manually_set": True,
+            "description_manually_set": False,
+        }
+
+        read = GoalRead.model_validate(row)
+
+        assert read.title_manually_set is True
+        assert read.description_manually_set is False

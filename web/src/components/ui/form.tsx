@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 import { CircleAlertIcon } from "lucide-react"
 import type { Label as LabelPrimitive } from "radix-ui"
 import { Slot } from "radix-ui"

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from "@/lib/utils"
 
 // design-system.md §7.4. Always 16px text: below that iOS Safari zooms in on focus (§4.2).
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {

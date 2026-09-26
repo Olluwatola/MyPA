@@ -23,6 +23,15 @@ export const STALE_TIME = {
 export const queryKeys = {
   me: ["users", "me"],
   onboardingStatus: ["onboarding", "status"],
+  goals: {
+    all: ["goals"],
+    lists: ["goals", "list"],
+    list: (view: string) => ["goals", "list", view],
+    detail: (id: string) => ["goals", "detail", id],
+  },
+  tasks: {
+    byGoal: (goalId: string) => ["tasks", "byGoal", goalId],
+  },
 } as const;
 
 /** Never retry a 4xx (it won't change); retry network errors and 5xx up to twice. */

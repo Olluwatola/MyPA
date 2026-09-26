@@ -39,6 +39,9 @@ class GoalRead(BaseModel):
     target_date: date | None = None
     memory_record_id: uuid_pkg.UUID | None = None
     created_at: datetime
+    # Shown as a pin in the UI: "You set this — the assistant won't change it".
+    title_manually_set: bool = False
+    description_manually_set: bool = False
 
 
 class GoalCreate(GoalBase):

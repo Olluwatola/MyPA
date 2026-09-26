@@ -479,7 +479,8 @@ export interface paths {
          * Read Goals
          * @description `status` takes several values (`?status=open&status=paused` for an "active goals"
          *     view). Newest first — the tasks list's "open first" trick relies on the alphabetical
-         *     order of two statuses and doesn't work with four.
+         *     order of two statuses and doesn't work with four. Answers `304` when the browser's
+         *     cached copy is still current (core/utils/etag.py).
          */
         get: operations["read_goals_api_v1_goals_get"];
         put?: never;
@@ -611,6 +612,16 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Title Manually Set
+             * @default false
+             */
+            title_manually_set: boolean;
+            /**
+             * Description Manually Set
+             * @default false
+             */
+            description_manually_set: boolean;
         };
         /** GoalStatusUpdate */
         GoalStatusUpdate: {

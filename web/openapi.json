@@ -1421,7 +1421,7 @@
           "goals"
         ],
         "summary": "Read Goals",
-        "description": "`status` takes several values (`?status=open&status=paused` for an \"active goals\"\nview). Newest first — the tasks list's \"open first\" trick relies on the alphabetical\norder of two statuses and doesn't work with four.",
+        "description": "`status` takes several values (`?status=open&status=paused` for an \"active goals\"\nview). Newest first — the tasks list's \"open first\" trick relies on the alphabetical\norder of two statuses and doesn't work with four. Answers `304` when the browser's\ncached copy is still current (core/utils/etag.py).",
         "operationId": "read_goals_api_v1_goals_get",
         "security": [
           {
@@ -1970,6 +1970,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "title_manually_set": {
+            "type": "boolean",
+            "title": "Title Manually Set",
+            "default": false
+          },
+          "description_manually_set": {
+            "type": "boolean",
+            "title": "Description Manually Set",
+            "default": false
           }
         },
         "type": "object",

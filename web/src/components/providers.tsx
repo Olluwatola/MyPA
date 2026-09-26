@@ -6,6 +6,7 @@ import { useState, type ReactNode } from "react";
 
 import { OfflineBanner } from "@/components/offline-banner";
 import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { makeQueryClient } from "@/lib/api/query-config";
 import { AuthProvider } from "@/lib/auth/auth-provider";
 
@@ -21,7 +22,9 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>{children}</AuthProvider>
+      <TooltipProvider>
+        <AuthProvider>{children}</AuthProvider>
+      </TooltipProvider>
       <OfflineBanner />
       <Toaster />
       <ReactQueryDevtools buttonPosition="top-right" />

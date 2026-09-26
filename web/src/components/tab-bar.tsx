@@ -3,7 +3,7 @@
 import { CheckSquareIcon, MessageCircleIcon, SettingsIcon, TargetIcon, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "cn";
+import { cn } from "@/lib/utils";
 
 type Tab = { href: string; label: string; icon: LucideIcon };
 

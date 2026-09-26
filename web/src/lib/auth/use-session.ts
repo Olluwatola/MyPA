@@ -13,3 +13,9 @@ export function useAuth(): AuthContextValue {
 export function useSession() {
   return useAuth().session;
 }
+
+/** The signed-in user's timezone (their profile, set from the browser at signup). */
+export function useTimeZone(): string {
+  const session = useSession();
+  return session.status === "authenticated" ? session.user.timezone : "UTC";
+}
