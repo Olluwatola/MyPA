@@ -15,7 +15,7 @@ import uuid as uuid_pkg
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastcrud import PaginatedListResponse, compute_offset, paginated_response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ from ...core.db.database import async_get_db
 from ...core.exceptions.http_exceptions import BadRequestException, ForbiddenException, NotFoundException
 from ...core.items.sticky import TASK_STICKY_FLAGS, manual_edit_flags
 from ...core.utils import queue
+from ...core.utils.etag import with_etag
 from ...crud.crud_goals import crud_goals
 from ...crud.crud_tasks import crud_tasks
 from ...schemas.task import (
@@ -103,6 +104,8 @@ async def write_task(
 
 @router.get("", response_model=PaginatedListResponse[TaskRead], status_code=200)
 async def read_tasks(
+    request: Request,
+    response: Response,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
     page: Annotated[int, Query(ge=1)] = 1,
@@ -113,7 +116,8 @@ async def read_tasks(
     due_from: date | None = None,
     due_to: date | None = None,
     goal_id: uuid_pkg.UUID | None = None,
-) -> dict:
+) -> dict | Response:
+    """Answers `304` when the browser's cached copy is still current (core/utils/etag.py)."""
     if due_from and due_to and due_from > due_to:
         raise BadRequestException("due_from must be on or before due_to.")
 
@@ -146,16 +150,20 @@ async def read_tasks(
         sort_orders=["desc", "asc", "desc", "desc"],
         **filters,
     )
-    return paginated_response(crud_data=crud_data, page=page, items_per_page=items_per_page)
+    payload = paginated_response(crud_data=crud_data, page=page, items_per_page=items_per_page)
+    return with_etag(request, response, payload, current_user["id"])
 
 
 @router.get("/{task_id}", response_model=TaskRead, status_code=200)
 async def read_task(
+    request: Request,
+    response: Response,
     task_id: uuid_pkg.UUID,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
-) -> dict:
-    return await _get_owned_task(db, task_id, current_user)
+) -> dict | Response:
+    task = await _get_owned_task(db, task_id, current_user)
+    return with_etag(request, response, task, current_user["id"])
 
 
 @router.patch("/{task_id}", response_model=TaskRead, status_code=200)

@@ -1,15 +1,16 @@
-import { CheckSquareIcon } from "lucide-react";
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
-import { EmptyState } from "@/components/empty-state";
+import { TaskListSkeleton } from "@/components/tasks/task-list";
+import { TasksView } from "@/components/tasks/tasks-view";
 
 export const metadata: Metadata = { title: "Tasks · MyPA" };
 
-// Placeholder until F1.5 (tasks view).
+// Suspense because the view reads its filters and open task from the URL.
 export default function TasksPage() {
   return (
-    <EmptyState icon={CheckSquareIcon} title="A clear list.">
-      Tasks from your email, calendar and chats will appear here.
-    </EmptyState>
+    <Suspense fallback={<TaskListSkeleton />}>
+      <TasksView />
+    </Suspense>
   );
 }

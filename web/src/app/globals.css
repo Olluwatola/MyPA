@@ -145,6 +145,9 @@
   --text-xs: 0.75rem;
   --text-xs--line-height: 1.35;
 
+  /* §4.2: uppercase only for tiny labels, always letter-spaced */
+  --tracking-label: 0.04em;
+
   /* §5 Radius */
   --radius-sm: 6px;
   --radius-md: 10px;

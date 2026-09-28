@@ -16,6 +16,10 @@ describe("formatDay", () => {
     expect(formatDay("2026-10-02", "UTC", NOW)).toBe("Fri 2 Oct");
   });
 
+  it("always uses three-letter months (not en-GB's 'Sept')", () => {
+    expect(formatDay("2026-09-29", "UTC", NOW)).toBe("Tue 29 Sep");
+  });
+
   it("adds the year for other years", () => {
     expect(formatDay("2027-10-03", "UTC", NOW)).toBe("3 Oct 2027");
   });

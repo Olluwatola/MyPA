@@ -16,6 +16,7 @@ import { api } from "@/lib/api/client";
 import { unwrap } from "@/lib/api/errors";
 import { queryKeys, STALE_TIME } from "@/lib/api/query-config";
 import type { components } from "@/lib/api/schema";
+import { GUESS_POLL_MS, GUESS_WINDOW_MS, isInGuessWindow } from "@/lib/guess-window";
 import { STATUS_LABEL, VIEWS, viewIncludes, type Goal, type GoalStatus, type GoalView } from "./labels";
 
 type GoalsPage = components["schemas"]["PaginatedListResponse_GoalRead_"];
@@ -27,11 +28,11 @@ const PAGE_SIZE = 50;
 
 // Plan §1.4: a new goal left without a horizon gets one from the AI in the background. While that
 // can still arrive, the goal's queries re-check every few seconds.
-export const HORIZON_GUESS_WINDOW_MS = 20_000;
-const HORIZON_POLL_MS = 3000;
+export const HORIZON_GUESS_WINDOW_MS = GUESS_WINDOW_MS;
+const HORIZON_POLL_MS = GUESS_POLL_MS;
 
 export function isGuessingHorizon(goal: Goal, now: number = Date.now()): boolean {
-  return goal.horizon == null && now - new Date(goal.created_at).getTime() < HORIZON_GUESS_WINDOW_MS;
+  return goal.horizon == null && isInGuessWindow(goal.created_at, now);
 }
 
 export const PENDING_ID_PREFIX = "pending-";
@@ -97,6 +98,27 @@ export function useLinkedTasks(goalId: string) {
   });
 }
 
+export type GoalTitle = { title: string; status: GoalStatus };
+
+/**
+ * Every goal's title and status (tasks plan §1.6), for goal names on task rows and the task
+ * panel's goal picker. Goals change rarely, and ETag makes the re-checks nearly free.
+ */
+export function useGoalTitles() {
+  return useQuery({
+    queryKey: queryKeys.goals.titles,
+    queryFn: async () => {
+      const titles = new Map<string, GoalTitle>();
+      for (let page = 1; ; page++) {
+        const result = unwrap(await api.GET("/api/v1/goals", { params: { query: { page, items_per_page: 100 } } }));
+        result.data.forEach((goal) => titles.set(goal.id, { title: goal.title, status: goal.status }));
+        if (!result.has_more) return titles;
+      }
+    },
+    staleTime: STALE_TIME.goals,
+  });
+}
+
 // ---------------------------------------------------------------- cache helpers
 
 type Snapshot = [QueryKey, unknown][];
@@ -138,6 +160,7 @@ function editLists(queryClient: QueryClient, change: (goal: Goal, view: GoalView
 function putGoal(queryClient: QueryClient, goal: Goal, replacingId: string = goal.id) {
   queryClient.setQueryData(queryKeys.goals.detail(goal.id), goal);
   editLists(queryClient, (_, view) => (viewIncludes(view, goal.status) ? goal : null), replacingId);
+  queryClient.invalidateQueries({ queryKey: queryKeys.goals.titles });
 }
 
 // ---------------------------------------------------------------- mutations
@@ -223,7 +246,10 @@ export function useSetGoalStatus() {
     },
     onError: (_error, _vars, context) => restore(queryClient, context?.snapshot),
     // Lists it should now appear in (e.g. Done) are fetched fresh.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals.lists }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.goals.lists });
+      queryClient.invalidateQueries({ queryKey: queryKeys.goals.titles });
+    },
   });
   return mutation;
 }
@@ -237,8 +263,12 @@ export function useDeleteGoal() {
     onSuccess: (_data, { id }) => {
       editLists(queryClient, () => null, id);
       queryClient.removeQueries({ queryKey: queryKeys.goals.detail(id) });
-      // The backend un-linked this goal's tasks.
+      queryClient.invalidateQueries({ queryKey: queryKeys.goals.titles });
+      // The backend un-linked this goal's tasks, wherever they're shown.
       queryClient.invalidateQueries({ queryKey: queryKeys.tasks.byGoal(id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.lists });
+      queryClient.invalidateQueries({ queryKey: queryKeys.tasks.calendars });
+      queryClient.invalidateQueries({ queryKey: ["tasks", "detail"] });
       toast.success("Goal deleted");
     },
   });

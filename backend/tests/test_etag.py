@@ -1,9 +1,9 @@
 """Unit tests for core/utils/etag.py (N-38)."""
 
-from fastapi import Request
+from fastapi import Request, Response
 from uuid6 import uuid7
 
-from src.app.core.utils.etag import etag_for, not_modified_or_none
+from src.app.core.utils.etag import etag_for, not_modified_or_none, with_etag
 
 
 def _request(if_none_match: str | None = None) -> Request:
@@ -54,3 +54,22 @@ class TestNotModifiedOrNone:
 
         assert not_modified_or_none(_request(if_none_match=strong_form), etag) is not None
         assert not_modified_or_none(_request(if_none_match=f'"other", {etag}'), etag) is not None
+
+
+class TestWithEtag:
+    def test_sets_the_header_and_returns_the_payload(self):
+        user_id = uuid7()
+        response = Response()
+
+        result = with_etag(_request(), response, {"title": "a"}, user_id)
+
+        assert result == {"title": "a"}
+        assert response.headers["ETag"] == etag_for({"title": "a"}, user_id)
+
+    def test_returns_304_when_the_browser_copy_is_current(self):
+        user_id = uuid7()
+        etag = etag_for({"title": "a"}, user_id)
+
+        result = with_etag(_request(if_none_match=etag), Response(), {"title": "a"}, user_id)
+
+        assert isinstance(result, Response) and result.status_code == 304

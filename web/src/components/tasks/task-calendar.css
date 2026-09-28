@@ -1,0 +1,39 @@
+/*
+ * FullCalendar's classic theme, with its palette mapped onto the design tokens (design-system.md
+ * §7.3) instead of loading its own palette.css. Lazy-loaded with the calendar.
+ */
+.task-calendar {
+  /* buttons (our toolbar replaces FullCalendar's; these cover "+N more" popovers and the like) */
+  --fc-classic-button: var(--surface);
+  --fc-classic-button-border: var(--border-strong);
+  --fc-classic-button-strong: var(--muted);
+  --fc-classic-button-strong-border: var(--border-strong);
+  --fc-classic-button-outline: var(--accent);
+  --fc-classic-button-foreground: var(--ink);
+
+  /* primary + events: open tasks are accent-soft blocks with accent-ink text */
+  --fc-classic-primary: var(--accent);
+  --fc-classic-primary-foreground: var(--on-accent);
+  --fc-classic-event: var(--accent-soft);
+  --fc-classic-event-contrast: var(--accent-ink);
+  --fc-classic-highlight: var(--accent-soft);
+  /* Neutral, not accent-soft: an accent-soft today cell swallowed the accent-soft events on it. */
+  --fc-classic-today: var(--sunken);
+  --fc-classic-now: var(--danger);
+  --fc-classic-ring-color: var(--accent);
+
+  /* neutrals: a canvas grid with border lines */
+  --fc-classic-background: var(--canvas);
+  --fc-classic-faint: var(--sunken);
+  --fc-classic-muted: var(--muted);
+  --fc-classic-strong: var(--border);
+  --fc-classic-foreground: var(--ink);
+  --fc-classic-faint-foreground: var(--ink-3);
+  --fc-classic-muted-foreground: var(--ink-2);
+  --fc-classic-border: var(--border);
+  --fc-classic-strong-border: var(--border-strong);
+
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}

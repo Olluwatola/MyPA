@@ -1,45 +1,14 @@
 "use client";
 
-import { PinIcon } from "lucide-react";
-import type { ReactNode } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { LabelRow } from "@/components/field-label";
+import { SuggestingLabel } from "@/components/suggesting";
 import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GoalFormInput, GoalFormValues } from "@/lib/goals/form-schema";
-import { SuggestingHorizon } from "./horizon-text";
-
-const PIN_TEXT = "You set this — the assistant won't change it";
-
-/** design-system.md §7.3: marks a field the user edited by hand (a sticky override). */
-function ManualPin() {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={PIN_TEXT}
-          className="flex size-6 items-center justify-center rounded-sm text-ink-3 hover:text-ink-2"
-        >
-          <PinIcon aria-hidden className="size-3.5" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{PIN_TEXT}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function LabelRow({ children, pinned }: { children: ReactNode; pinned?: boolean }) {
-  return (
-    <div className="flex items-center gap-1">
-      {children}
-      {pinned && <ManualPin />}
-    </div>
-  );
-}
 
 type GoalFieldsProps = {
   form: UseFormReturn<GoalFormInput, unknown, GoalFormValues>;
@@ -87,7 +56,7 @@ export function GoalFields({ form, mode, titlePinned, descriptionPinned, suggest
         <div className="grid gap-2">
           <p className="text-sm font-medium">Horizon</p>
           <p className="text-sm text-ink-2">
-            <SuggestingHorizon />
+            <SuggestingLabel />
           </p>
         </div>
       ) : (

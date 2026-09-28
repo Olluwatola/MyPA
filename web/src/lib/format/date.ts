@@ -13,14 +13,15 @@ export function dayOf(isoDateTime: string, timeZone: string): string {
   return todayIn(timeZone, new Date(isoDateTime));
 }
 
-function addDays(isoDate: string, days: number): string {
+export function addDays(isoDate: string, days: number): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
 
 function parts(isoDate: string, options: Intl.DateTimeFormatOptions): Record<string, string> {
-  const formatted = new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" }).formatToParts(
+  // Parts only (the order is assembled below). en-US for three-letter months: en-GB now says "Sept".
+  const formatted = new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).formatToParts(
     new Date(`${isoDate}T00:00:00Z`),
   );
   return Object.fromEntries(formatted.map((part) => [part.type, part.value]));
@@ -43,4 +44,10 @@ export function formatDay(isoDate: string, timeZone: string, now: Date = new Dat
 /** Before today in `timeZone`. */
 export function isOverdue(isoDate: string, timeZone: string, now: Date = new Date()): boolean {
   return isoDate < todayIn(timeZone, now);
+}
+
+/** "Added today" / "Added Fri 3 Oct" for an item's `created_at`. */
+export function formatAdded(createdAt: string, timeZone: string, now: Date = new Date()): string {
+  const day = formatDay(dayOf(createdAt, timeZone), timeZone, now);
+  return `Added ${day === "Today" ? "today" : day}`;
 }

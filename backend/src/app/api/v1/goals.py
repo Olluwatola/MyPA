@@ -22,7 +22,7 @@ from ...core.db.database import async_get_db
 from ...core.exceptions.http_exceptions import ForbiddenException, NotFoundException
 from ...core.items.sticky import GOAL_STICKY_FLAGS, manual_edit_flags
 from ...core.utils import queue
-from ...core.utils.etag import etag_for, not_modified_or_none
+from ...core.utils.etag import with_etag
 from ...crud.crud_goals import crud_goals
 from ...models.task import Task
 from ...schemas.goal import (
@@ -53,16 +53,6 @@ async def _get_owned_goal(db: AsyncSession, goal_id: uuid_pkg.UUID, current_user
     if goal["user_id"] != current_user["id"]:
         raise ForbiddenException("You do not have access to this goal.")
     return goal
-
-
-def _with_etag(request: Request, response: Response, payload: dict, current_user: dict) -> dict | Response:
-    """The payload with an `ETag` header, or a bodyless `304` if the browser's copy is current."""
-    etag = etag_for(payload, current_user["id"])
-    not_modified = not_modified_or_none(request, etag)
-    if not_modified is not None:
-        return not_modified
-    response.headers["ETag"] = etag
-    return payload
 
 
 @router.post("", response_model=GoalRead, status_code=201)
@@ -125,7 +115,7 @@ async def read_goals(
         **filters,
     )
     payload = paginated_response(crud_data=crud_data, page=page, items_per_page=items_per_page)
-    return _with_etag(request, response, payload, current_user)
+    return with_etag(request, response, payload, current_user["id"])
 
 
 @router.get("/{goal_id}", response_model=GoalRead, status_code=200)
@@ -137,7 +127,7 @@ async def read_goal(
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict | Response:
     goal = await _get_owned_goal(db, goal_id, current_user)
-    return _with_etag(request, response, goal, current_user)
+    return with_etag(request, response, goal, current_user["id"])
 
 
 @router.patch("/{goal_id}", response_model=GoalRead, status_code=200)

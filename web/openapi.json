@@ -993,6 +993,7 @@
           "tasks"
         ],
         "summary": "Read Tasks",
+        "description": "Answers `304` when the browser's cached copy is still current (core/utils/etag.py).",
         "operationId": "read_tasks_api_v1_tasks_get",
         "security": [
           {
@@ -2732,6 +2733,31 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "title_manually_set": {
+            "type": "boolean",
+            "title": "Title Manually Set",
+            "default": false
+          },
+          "description_manually_set": {
+            "type": "boolean",
+            "title": "Description Manually Set",
+            "default": false
+          },
+          "urgency_manually_set": {
+            "type": "boolean",
+            "title": "Urgency Manually Set",
+            "default": false
+          },
+          "effort_level_manually_set": {
+            "type": "boolean",
+            "title": "Effort Level Manually Set",
+            "default": false
+          },
+          "goal_id_manually_set": {
+            "type": "boolean",
+            "title": "Goal Id Manually Set",
+            "default": false
           }
         },
         "type": "object",

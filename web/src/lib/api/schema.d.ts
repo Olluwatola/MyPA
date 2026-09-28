@@ -421,7 +421,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read Tasks */
+        /**
+         * Read Tasks
+         * @description Answers `304` when the browser's cached copy is still current (core/utils/etag.py).
+         */
         get: operations["read_tasks_api_v1_tasks_get"];
         put?: never;
         /** Write Task */
@@ -877,6 +880,31 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Title Manually Set
+             * @default false
+             */
+            title_manually_set: boolean;
+            /**
+             * Description Manually Set
+             * @default false
+             */
+            description_manually_set: boolean;
+            /**
+             * Urgency Manually Set
+             * @default false
+             */
+            urgency_manually_set: boolean;
+            /**
+             * Effort Level Manually Set
+             * @default false
+             */
+            effort_level_manually_set: boolean;
+            /**
+             * Goal Id Manually Set
+             * @default false
+             */
+            goal_id_manually_set: boolean;
         };
         /** TaskStatusUpdate */
         TaskStatusUpdate: {

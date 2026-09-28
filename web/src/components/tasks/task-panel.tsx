@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { onlineManager, useQueryClient } from "@tanstack/react-query";
-import { Loader2Icon } from "lucide-react";
+import { CalendarClockIcon, Loader2Icon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -19,71 +19,69 @@ import { queryKeys } from "@/lib/api/query-config";
 import { useTimeZone } from "@/lib/auth/use-session";
 import { formatAdded } from "@/lib/format/date";
 import {
-  EMPTY_GOAL_FORM,
-  goalFormSchema,
+  EMPTY_TASK_FORM,
+  taskFormSchema,
   toCreateBody,
   toFormValues,
   toPatchBody,
-  type GoalFormInput,
-  type GoalFormValues,
-} from "@/lib/goals/form-schema";
-import type { Goal } from "@/lib/goals/labels";
+  type TaskFormInput,
+  type TaskFormValues,
+} from "@/lib/tasks/form-schema";
+import type { Task } from "@/lib/tasks/labels";
 import {
   PENDING_ID_PREFIX,
-  useCreateGoal,
-  useDeleteGoal,
-  useGoal,
-  usePendingGoals,
-  useUpdateGoal,
-} from "@/lib/goals/queries";
-import { GoalFields } from "./goal-fields";
-import { GoalStatusMenu } from "./goal-status-menu";
-import { useIsGuessingHorizon } from "./horizon-text";
-import { LinkedTasks } from "./linked-tasks";
+  useCreateTask,
+  useDeleteTask,
+  usePendingTasks,
+  useTask,
+  useUpdateTask,
+} from "@/lib/tasks/queries";
+import { DoneCheckbox } from "./done-checkbox";
+import { TaskFields } from "./task-fields";
+import { useTaskGuessing } from "./task-row";
 
-const FORM_ID = "goal-form";
+const FORM_ID = "task-form";
 
-type GoalPanelProps = {
-  /** `"new"`, a goal id, or `null` (closed) — mirrors the `?goal=` URL param. */
-  goalParam: string | null;
+type TaskPanelProps = {
+  /** `"new"`, a task id, or `null` (closed) — mirrors the `?task=` URL param. */
+  taskParam: string | null;
   onClose: () => void;
-  /** After a create: close, and show a view the new (open) goal appears in. */
-  onCreated: () => void;
+  /** After a create: close, and make sure the new task is visible (plan §6). */
+  onCreated: (task: { urgency: TaskFormValues["urgency"] }) => void;
 };
 
-export function GoalPanel({ goalParam, onClose, onCreated }: GoalPanelProps) {
-  if (goalParam === null) return null;
-  if (goalParam === "new") return <CreateGoalPanel onClose={onClose} onCreated={onCreated} />;
-  return <EditGoalPanel key={goalParam} id={goalParam} onClose={onClose} />;
+export function TaskPanel({ taskParam, onClose, onCreated }: TaskPanelProps) {
+  if (taskParam === null) return null;
+  if (taskParam === "new") return <CreateTaskPanel onClose={onClose} onCreated={onCreated} />;
+  return <EditTaskPanel key={taskParam} id={taskParam} onClose={onClose} />;
 }
 
-function useGoalForm(values?: GoalFormInput) {
-  return useForm<GoalFormInput, unknown, GoalFormValues>({
-    resolver: zodResolver(goalFormSchema),
-    defaultValues: EMPTY_GOAL_FORM,
+function useTaskForm(values?: TaskFormInput) {
+  return useForm<TaskFormInput, unknown, TaskFormValues>({
+    resolver: zodResolver(taskFormSchema),
+    defaultValues: EMPTY_TASK_FORM,
     values,
-    // When the goal refreshes underneath (AI horizon arrives, status changed), keep what the
-    // user is typing.
+    // When the task refreshes underneath (AI guess arrives, ticked done), keep what the user is typing.
     resetOptions: { keepDirtyValues: true },
   });
 }
 
-function CreateGoalPanel({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const form = useGoalForm();
-  const create = useCreateGoal();
-  const guard = useCloseGuard(form.formState.isDirty, onClose, "goal");
+function CreateTaskPanel({ onClose, onCreated }: Omit<TaskPanelProps, "taskParam">) {
+  const form = useTaskForm();
+  const create = useCreateTask();
+  const guard = useCloseGuard(form.formState.isDirty, onClose, "task");
 
   const onSubmit = form.handleSubmit(async (values) => {
     const saving = create.mutateAsync({ body: toCreateBody(values), tempId: `${PENDING_ID_PREFIX}${crypto.randomUUID()}` });
     // Offline, the create waits for the connection; its row shows "Waiting to send" meanwhile.
     if (!onlineManager.isOnline()) {
       saving.catch(() => undefined);
-      onCreated();
+      onCreated(values);
       return;
     }
     try {
       await saving;
-      onCreated();
+      onCreated(values);
     } catch (error) {
       // Stay open with everything still filled in (never lose work).
       form.setError("root", { message: errorMessage(error) });
@@ -95,13 +93,13 @@ function CreateGoalPanel({ onClose, onCreated }: { onClose: () => void; onCreate
       <DetailPanel
         open
         onOpenChange={(open) => !open && guard.requestClose()}
-        title="New goal"
-        description="Add a goal"
+        title="New task"
+        description="Add a task"
         footer={
           <>
             <Button type="submit" form={FORM_ID} disabled={form.formState.isSubmitting}>
               {form.formState.isSubmitting && <Loader2Icon aria-hidden className="animate-spin" />}
-              Create goal
+              Create task
             </Button>
             <Button variant="outline" onClick={guard.requestClose}>
               Cancel
@@ -111,7 +109,7 @@ function CreateGoalPanel({ onClose, onCreated }: { onClose: () => void; onCreate
       >
         <Form {...form}>
           <form id={FORM_ID} onSubmit={onSubmit} noValidate>
-            <GoalFields form={form} mode="create" />
+            <TaskFields form={form} mode="create" />
             <RootError message={form.formState.errors.root?.message} />
           </form>
         </Form>
@@ -121,28 +119,28 @@ function CreateGoalPanel({ onClose, onCreated }: { onClose: () => void; onCreate
   );
 }
 
-function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
+function EditTaskPanel({ id, onClose }: { id: string; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const goalQuery = useGoal(id);
-  const goal = goalQuery.data;
-  const unavailable = goalQuery.error instanceof ApiError && [403, 404].includes(goalQuery.error.status);
+  const taskQuery = useTask(id);
+  const task = taskQuery.data;
+  const unavailable = taskQuery.error instanceof ApiError && [403, 404].includes(taskQuery.error.status);
 
   // Deleted elsewhere (or not this user's): the lists may still show it.
   useEffect(() => {
-    if (unavailable) queryClient.invalidateQueries({ queryKey: queryKeys.goals.lists });
+    if (unavailable) queryClient.invalidateQueries({ queryKey: queryKeys.tasks.lists });
   }, [unavailable, queryClient]);
 
-  const values = useMemo(() => (goal ? toFormValues(goal) : undefined), [goal]);
-  const form = useGoalForm(values);
-  const update = useUpdateGoal();
-  const guard = useCloseGuard(form.formState.isDirty, onClose, "goal");
+  const values = useMemo(() => (task ? toFormValues(task) : undefined), [task]);
+  const form = useTaskForm(values);
+  const update = useUpdateTask();
+  const guard = useCloseGuard(form.formState.isDirty, onClose, "task");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const deleteGoal = useDeleteGoal();
+  const deleteTask = useDeleteTask();
 
   const onSubmit = form.handleSubmit((values) => {
     const body = toPatchBody(values, form.formState.dirtyFields);
     update.mutate(
-      { id, body },
+      { id, body, previousGoalId: task?.goal_id ?? null },
       {
         onSuccess: (saved) => form.reset(toFormValues(saved)),
         onError: (error) => form.setError("root", { message: errorMessage(error) }),
@@ -150,13 +148,13 @@ function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
     );
   });
 
-  if (unavailable || (goalQuery.isError && !goal)) {
+  if (unavailable || (taskQuery.isError && !task)) {
     return (
       <DetailPanel
         open
         onOpenChange={(open) => !open && onClose()}
-        title="Goal"
-        description="This goal can't be shown"
+        title="Task"
+        description="This task can't be shown"
         footer={
           <Button variant="outline" onClick={onClose}>
             Close
@@ -164,7 +162,7 @@ function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
         }
       >
         <p className="text-ink-2">
-          {unavailable ? "This goal isn't available any more." : "Couldn't load this goal. Check your connection and try again."}
+          {unavailable ? "This task isn't available any more." : "Couldn't load this task. Check your connection and try again."}
         </p>
       </DetailPanel>
     );
@@ -175,17 +173,17 @@ function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
       <DetailPanel
         open
         onOpenChange={(open) => !open && guard.requestClose()}
-        title={goal?.title ?? "Goal"}
-        description="View and edit this goal"
+        title={task?.title ?? "Task"}
+        description="View and edit this task"
         footer={
-          goal && (
+          task && (
             <>
               <Button
                 variant="ghost"
                 className="mr-auto text-danger hover:bg-danger-soft"
                 onClick={() => setConfirmingDelete(true)}
               >
-                Delete goal
+                Delete task
               </Button>
               <Button variant="outline" onClick={guard.requestClose}>
                 Cancel
@@ -198,19 +196,18 @@ function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
           )
         }
       >
-        {goal ? (
+        {task ? (
           <div className="flex flex-col gap-6">
-            <GoalMeta goal={goal} />
+            <TaskMeta task={task} />
             <Form {...form}>
               <form id={FORM_ID} onSubmit={onSubmit} noValidate>
-                <EditFields goal={goal} form={form} />
+                <EditFields task={task} form={form} />
                 <RootError message={form.formState.errors.root?.message} />
               </form>
             </Form>
-            <LinkedTasks goalId={goal.id} />
           </div>
         ) : (
-          <div aria-busy="true" aria-label="Loading goal" className="flex flex-col gap-4">
+          <div aria-busy="true" aria-label="Loading task" className="flex flex-col gap-4">
             <Skeleton className="h-6 w-40" />
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-20 w-full" />
@@ -221,11 +218,11 @@ function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
       <ConfirmDialog
         open={confirmingDelete}
         onOpenChange={setConfirmingDelete}
-        title="Delete this goal?"
-        description="Its tasks stay, but lose the link."
-        confirmLabel="Delete goal"
+        title="Delete this task?"
+        description="This can't be undone."
+        confirmLabel="Delete task"
         onConfirm={() => {
-          deleteGoal.mutate({ id });
+          deleteTask.mutate({ id, goalId: task?.goal_id ?? null });
           onClose();
         }}
       />
@@ -233,29 +230,46 @@ function EditGoalPanel({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function EditFields({ goal, form }: { goal: Goal; form: ReturnType<typeof useGoalForm> }) {
-  const guessing = useIsGuessingHorizon(goal);
+function EditFields({ task, form }: { task: Task; form: ReturnType<typeof useTaskForm> }) {
+  const suggesting = useTaskGuessing(task);
   return (
-    <GoalFields
+    <TaskFields
       form={form}
       mode="edit"
-      titlePinned={goal.title_manually_set}
-      descriptionPinned={goal.description_manually_set}
-      suggestingHorizon={guessing}
+      suggesting={suggesting}
+      pinned={{
+        title: task.title_manually_set,
+        description: task.description_manually_set,
+        urgency: task.urgency_manually_set,
+        effort: task.effort_level_manually_set,
+        goal: task.goal_id_manually_set,
+      }}
     />
   );
 }
 
-/** Status, source, when it was added, and whether an offline change is waiting to send. */
-function GoalMeta({ goal }: { goal: Goal }) {
+/** Done, source, when it was added, a scheduled slot, and whether a change is waiting to send. */
+function TaskMeta({ task }: { task: Task }) {
   const timeZone = useTimeZone();
-  const pending = usePendingGoals().get(goal.id);
-  
+  const pending = usePendingTasks().get(task.id);
+
   return (
-    <div className="flex flex-wrap items-center gap-2 text-sm text-ink-2">
-      <GoalStatusMenu goal={goal} />
-      <SourceBadge source={goal.source} />
-      <span>{formatAdded(goal.created_at, timeZone)}</span>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-ink-2">
+      <span className="flex items-center gap-2">
+        <DoneCheckbox task={task} />
+        <span className={task.status === "done" ? "text-success" : undefined}>
+          {task.status === "done" ? "Done" : "Open"}
+        </span>
+      </span>
+      <SourceBadge source={task.source} />
+      <span>{formatAdded(task.created_at, timeZone)}</span>
+      {/* Only the event id is stored until Scouring (1.12) stores the slot itself (N-43). */}
+      {task.scheduled_event_id && (
+        <span className="inline-flex items-center gap-1">
+          <CalendarClockIcon aria-hidden className="size-4" />
+          Scheduled in your calendar
+        </span>
+      )}
       {pending && <PendingLabel kind={pending} />}
     </div>
   );

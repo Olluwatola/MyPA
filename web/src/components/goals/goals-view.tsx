@@ -1,11 +1,11 @@
 "use client";
 
 import { PlusIcon } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { parseView, type GoalView } from "@/lib/goals/labels";
+import { usePanelFocusReturn, useSearchNavigate } from "@/lib/use-search-state";
 import { GoalFilter } from "./goal-filter";
 import { GoalList } from "./goal-list";
 import { GoalPanel } from "./goal-panel";
@@ -15,34 +15,15 @@ import { GoalPanel } from "./goal-panel";
  * keeps the filter and the open goal, and Back closes the panel.
  */
 export function GoalsView() {
-  const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const view = parseView(searchParams.get("status"));
   const goalParam = searchParams.get("goal");
-
-  function navigate(changes: Record<string, string | null>, mode: "push" | "replace") {
-    const params = new URLSearchParams(searchParams.toString());
-    for (const [key, value] of Object.entries(changes)) {
-      if (value === null) params.delete(key);
-      else params.set(key, value);
-    }
-    if (params.get("status") === "active") params.delete("status");
-    const query = params.toString();
-    router[mode](query ? `${pathname}?${query}` : pathname, { scroll: false });
-  }
-
-  // The panel unmounts when closed, so Radix can't return focus itself: put it back on whatever
-  // opened the panel (a row, "New goal"), however it was closed — X, Esc, Cancel or Back.
-  const opener = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (goalParam === null && opener.current?.isConnected) opener.current.focus();
-    if (goalParam === null) opener.current = null;
-  }, [goalParam]);
+  const navigate = useSearchNavigate({ status: "active" });
+  const rememberOpener = usePanelFocusReturn(goalParam);
 
   // Opening the panel adds a history entry so Back closes it; everything else replaces.
   const open = (goal: string) => {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    rememberOpener();
     navigate({ goal }, "push");
   };
   const close = () => navigate({ goal: null }, "replace");

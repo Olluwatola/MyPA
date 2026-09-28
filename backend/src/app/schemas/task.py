@@ -49,6 +49,13 @@ class TaskRead(BaseModel):
     scheduled_event_id: str | None = None
     goal_id: uuid_pkg.UUID | None = None
     created_at: datetime
+    # Shown as pins in the UI ("You set this — the assistant won't change it"); the urgency/effort
+    # flags also tell the UI whether the AI guess is still to come.
+    title_manually_set: bool = False
+    description_manually_set: bool = False
+    urgency_manually_set: bool = False
+    effort_level_manually_set: bool = False
+    goal_id_manually_set: bool = False
 
 
 class TaskCreate(BaseModel):

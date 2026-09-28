@@ -49,12 +49,18 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     memory_record_id: null,
     scheduled_event_id: null,
     goal_id: null,
-    created_at: new Date().toISOString(),
+    // An hour ago: well outside the AI-guess window.
+    created_at: new Date(Date.now() - 3_600_000).toISOString(),
+    title_manually_set: false,
+    description_manually_set: false,
+    urgency_manually_set: false,
+    effort_level_manually_set: false,
+    goal_id_manually_set: false,
     ...overrides,
-  } as Task;
+  };
 }
 
-function record(key: string, body: unknown) {
+export function record(key: string, body: unknown) {
   goalsDb.bodies.set(key, [...(goalsDb.bodies.get(key) ?? []), body]);
 }
 

@@ -3,10 +3,11 @@ background AI guess only for empty fields, list filters/sort/pagination, sticky 
 manual edit, soft delete (never touching Notion), and soft-deleted tasks returning 404 on
 every single-item route."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import Request, Response
 from pydantic import ValidationError
 from uuid6 import uuid7
 
@@ -20,13 +21,18 @@ from src.app.api.v1.tasks import (
     write_task,
 )
 from src.app.core.exceptions.http_exceptions import BadRequestException, ForbiddenException, NotFoundException
-from src.app.schemas.task import TaskCreate, TaskUpdate
+from src.app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 
 MODULE = "src.app.api.v1.tasks"
 
 
 def _owned_task(current_user_dict: dict, **overrides) -> dict:
     return {"id": uuid7(), "user_id": current_user_dict["id"], "status": "open", "title": "Send invoice"} | overrides
+
+
+def _request(if_none_match: str | None = None) -> Request:
+    headers = [(b"if-none-match", if_none_match.encode())] if if_none_match else []
+    return Request({"type": "http", "method": "GET", "path": "/api/v1/tasks", "headers": headers})
 
 
 def _assert_lookup_hides_deleted(mock_crud) -> None:
@@ -105,7 +111,14 @@ class TestReadTasks:
     async def test_default_call_filters_deleted_sorts_and_paginates(self, mock_db, current_user_dict):
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 45})
-            result = await read_tasks(current_user=current_user_dict, db=mock_db, page=2, items_per_page=20)
+            result = await read_tasks(
+                request=_request(),
+                response=Response(),
+                current_user=current_user_dict,
+                db=mock_db,
+                page=2,
+                items_per_page=20,
+            )
 
         kwargs = mock_crud.get_multi.call_args.kwargs
         assert kwargs["user_id"] == current_user_dict["id"]
@@ -120,6 +133,8 @@ class TestReadTasks:
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
             await read_tasks(
+                request=_request(),
+                response=Response(),
                 current_user=current_user_dict,
                 db=mock_db,
                 page=1,
@@ -142,7 +157,14 @@ class TestReadTasks:
     async def test_unset_filters_are_not_sent(self, mock_db, current_user_dict):
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
-            await read_tasks(current_user=current_user_dict, db=mock_db, page=1, items_per_page=20)
+            await read_tasks(
+                request=_request(),
+                response=Response(),
+                current_user=current_user_dict,
+                db=mock_db,
+                page=1,
+                items_per_page=20,
+            )
 
         kwargs = mock_crud.get_multi.call_args.kwargs
         for key in ("status", "urgency", "source", "due_date__gte", "due_date__lte"):
@@ -152,6 +174,8 @@ class TestReadTasks:
     async def test_inverted_due_range_is_rejected(self, mock_db, current_user_dict):
         with pytest.raises(BadRequestException):
             await read_tasks(
+                request=_request(),
+                response=Response(),
                 current_user=current_user_dict,
                 db=mock_db,
                 page=1,
@@ -167,7 +191,9 @@ class TestReadTask:
         task = _owned_task(current_user_dict)
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get = AsyncMock(return_value=task)
-            result = await read_task(task_id=task["id"], current_user=current_user_dict, db=mock_db)
+            result = await read_task(
+                request=_request(), response=Response(), task_id=task["id"], current_user=current_user_dict, db=mock_db
+            )
         assert result == task
         _assert_lookup_hides_deleted(mock_crud)
 
@@ -176,7 +202,9 @@ class TestReadTask:
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get = AsyncMock(return_value=None)  # the is_deleted=False filter excludes it
             with pytest.raises(NotFoundException):
-                await read_task(task_id=uuid7(), current_user=current_user_dict, db=mock_db)
+                await read_task(
+                    request=_request(), response=Response(), task_id=uuid7(), current_user=current_user_dict, db=mock_db
+                )
         _assert_lookup_hides_deleted(mock_crud)
 
     @pytest.mark.asyncio
@@ -184,7 +212,9 @@ class TestReadTask:
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get = AsyncMock(return_value={"user_id": uuid7()})
             with pytest.raises(ForbiddenException):
-                await read_task(task_id=uuid7(), current_user=current_user_dict, db=mock_db)
+                await read_task(
+                    request=_request(), response=Response(), task_id=uuid7(), current_user=current_user_dict, db=mock_db
+                )
 
 
 class TestPatchTask:
@@ -455,7 +485,15 @@ class TestTaskGoalLink:
         goal_id = uuid7()
         with patch(f"{MODULE}.crud_tasks") as mock_crud:
             mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
-            await read_tasks(current_user=current_user_dict, db=mock_db, page=1, items_per_page=20, goal_id=goal_id)
+            await read_tasks(
+                request=_request(),
+                response=Response(),
+                current_user=current_user_dict,
+                db=mock_db,
+                page=1,
+                items_per_page=20,
+                goal_id=goal_id,
+            )
         kwargs = mock_crud.get_multi.call_args.kwargs
         assert kwargs["goal_id"] == goal_id and kwargs["user_id"] == current_user_dict["id"]
 
@@ -496,3 +534,73 @@ class TestTaskGoalLink:
                     task_id=task["id"], body=TaskUpdate(goal_id=uuid7()), current_user=current_user_dict, db=mock_db
                 )
         mock_crud.update.assert_not_called()
+
+
+class TestTaskEtag:
+    @pytest.mark.asyncio
+    async def test_list_sets_etag_then_answers_304_when_unchanged(self, mock_db, current_user_dict):
+        with patch(f"{MODULE}.crud_tasks") as mock_crud:
+            mock_crud.get_multi = AsyncMock(return_value={"data": [], "total_count": 0})
+            first = Response()
+            await read_tasks(request=_request(), response=first, current_user=current_user_dict, db=mock_db)
+            etag = first.headers["ETag"]
+
+            second = await read_tasks(
+                request=_request(if_none_match=etag), response=Response(), current_user=current_user_dict, db=mock_db
+            )
+
+        assert isinstance(second, Response)
+        assert second.status_code == 304
+        assert second.headers["ETag"] == etag
+        assert second.body == b""
+
+    @pytest.mark.asyncio
+    async def test_detail_changed_task_gets_a_new_etag_and_a_full_reply(self, mock_db, current_user_dict):
+        task = _owned_task(current_user_dict)
+        with patch(f"{MODULE}.crud_tasks") as mock_crud:
+            mock_crud.get = AsyncMock(return_value=task)
+            first = Response()
+            await read_task(
+                request=_request(), response=first, task_id=task["id"], current_user=current_user_dict, db=mock_db
+            )
+            same = await read_task(
+                request=_request(if_none_match=first.headers["ETag"]),
+                response=Response(),
+                task_id=task["id"],
+                current_user=current_user_dict,
+                db=mock_db,
+            )
+
+            mock_crud.get = AsyncMock(return_value=task | {"title": "Send the proposal v2"})
+            changed_response = Response()
+            changed = await read_task(
+                request=_request(if_none_match=first.headers["ETag"]),
+                response=changed_response,
+                task_id=task["id"],
+                current_user=current_user_dict,
+                db=mock_db,
+            )
+
+        assert isinstance(same, Response) and same.status_code == 304
+        assert changed == task | {"title": "Send the proposal v2"}
+        assert changed_response.headers["ETag"] != first.headers["ETag"]
+
+
+class TestTaskRead:
+    def test_carries_the_sticky_flags_for_the_ui(self, current_user_dict):
+        row = _owned_task(current_user_dict) | {
+            "title": "Send the proposal",
+            "source": "manual",
+            "urgency": "high",
+            "created_at": datetime.now(UTC),
+            "urgency_manually_set": True,
+            "goal_id_manually_set": True,
+        }
+
+        read = TaskRead.model_validate(row)
+
+        assert read.urgency_manually_set is True
+        assert read.goal_id_manually_set is True
+        assert read.title_manually_set is False
+        assert read.description_manually_set is False
+        assert read.effort_level_manually_set is False

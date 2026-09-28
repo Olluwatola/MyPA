@@ -56,3 +56,30 @@ def not_modified_or_none(request: Request, etag: str) -> Response | None:
     if etag.removeprefix("W/") in candidates or "*" in candidates:
         return Response(status_code=304, headers={"ETag": etag})
     return None
+
+
+def with_etag(request: Request, response: Response, payload: dict, user_id: Any) -> dict | Response:
+    """The payload with an `ETag` header set, or a bodyless `304` if the browser's copy is current.
+
+    Parameters
+    ----------
+    request: Request
+        The incoming request.
+    response: Response
+        The route's response, to carry the `ETag` header.
+    payload: dict
+        The body the route would return.
+    user_id: Any
+        The current user's id.
+
+    Returns
+    -------
+    dict | Response
+        The payload, or the `304` to return instead.
+    """
+    etag = etag_for(payload, user_id)
+    not_modified = not_modified_or_none(request, etag)
+    if not_modified is not None:
+        return not_modified
+    response.headers["ETag"] = etag
+    return payload

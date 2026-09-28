@@ -28,8 +28,15 @@ export const queryKeys = {
     lists: ["goals", "list"],
     list: (view: string) => ["goals", "list", view],
     detail: (id: string) => ["goals", "detail", id],
+    titles: ["goals", "titles"],
   },
   tasks: {
+    all: ["tasks"],
+    lists: ["tasks", "list"],
+    list: (filters: object) => ["tasks", "list", filters],
+    calendars: ["tasks", "calendar"],
+    calendar: (range: { from: string; to: string }, filters: object) => ["tasks", "calendar", range, filters],
+    detail: (id: string) => ["tasks", "detail", id],
     byGoal: (goalId: string) => ["tasks", "byGoal", goalId],
   },
 } as const;

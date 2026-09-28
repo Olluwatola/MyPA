@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckCircle2Icon, CircleIcon } from "lucide-react";
+import Link from "next/link";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTimeZone } from "@/lib/auth/use-session";
@@ -30,16 +31,22 @@ export function LinkedTasks({ goalId }: { goalId: string }) {
       ) : (
         <ul className="flex flex-col">
           {tasks.data.data.map((task) => (
-            <li key={task.id} className="flex min-h-9 items-center gap-2 text-sm">
-              {task.status === "done" ? (
-                <CheckCircle2Icon aria-label="Done" className="size-4 shrink-0 text-success" />
-              ) : (
-                <CircleIcon aria-label="Open" className="size-4 shrink-0 text-ink-3" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-ink">{task.title}</span>
-              {task.due_date && (
-                <span className="shrink-0 text-xs text-ink-2 tabular-nums">{formatDay(task.due_date, timeZone)}</span>
-              )}
+            <li key={task.id}>
+              {/* Opens the task in Tasks (tasks plan §1.6). */}
+              <Link
+                href={`/tasks?task=${task.id}`}
+                className="-mx-2 flex min-h-9 items-center gap-2 rounded-sm px-2 text-sm hover:bg-muted"
+              >
+                {task.status === "done" ? (
+                  <CheckCircle2Icon aria-label="Done" className="size-4 shrink-0 text-success" />
+                ) : (
+                  <CircleIcon aria-label="Open" className="size-4 shrink-0 text-ink-3" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-ink">{task.title}</span>
+                {task.due_date && (
+                  <span className="shrink-0 text-xs text-ink-2 tabular-nums">{formatDay(task.due_date, timeZone)}</span>
+                )}
+              </Link>
             </li>
           ))}
         </ul>
